@@ -52,7 +52,7 @@ struct PlaylistCarouselSection: View {
                 }
                 .frame(width: MenuBarLayout.contentWidth - 4, alignment: .leading)
             }
-            .onChange(of: items.count) { _, _ in
+            .onChange(of: items.count) { _ in
                 page = min(page, maxPage)
             }
         }

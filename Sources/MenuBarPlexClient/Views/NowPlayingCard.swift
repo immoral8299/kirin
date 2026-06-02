@@ -96,7 +96,7 @@ struct NowPlayingCard: View {
         .padding(12)
         .frame(width: MenuBarLayout.contentWidth, alignment: .leading)
         .background(AppTheme.panelFill, in: RoundedRectangle(cornerRadius: AppCornerRadius.card, style: .continuous))
-        .onChange(of: playbackProgress) { _, newValue in
+        .onChange(of: playbackProgress) { newValue in
             if !isSeeking {
                 sliderValue = newValue
             }

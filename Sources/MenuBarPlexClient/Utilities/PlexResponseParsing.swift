@@ -91,7 +91,7 @@ func firstMediaPartPath(from node: [String: Any]) -> String? {
     return path
 }
 
-func streamURL(from path: String, server: PlexServer, token: String?) -> URL {
+func plexStreamURL(from path: String, server: PlexServer, token: String?) -> URL {
     if path.hasPrefix("http://") || path.hasPrefix("https://") {
         return URL(string: path) ?? server.baseURL
     }
@@ -113,7 +113,7 @@ func streamURL(from path: String, server: PlexServer, token: String?) -> URL {
     return components?.url ?? url
 }
 
-func artworkURL(from artworkPath: String?, server: PlexServer, token: String?) -> URL? {
+func plexArtworkURL(from artworkPath: String?, server: PlexServer, token: String?) -> URL? {
     guard let artworkPath else {
         return nil
     }

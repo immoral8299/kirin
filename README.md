@@ -1,6 +1,6 @@
 # PlexTray
 
-PlexTray is a macOS 14+ menu bar music client for Plex with a live in-menu UI.
+PlexTray is a macOS 13+ menu bar music client for Plex with a live in-menu UI.
 
 ## Current MVP Scaffold
 
@@ -54,10 +54,3 @@ Optional environment variables:
 - `BUNDLE_ID=com.yourcompany.PlexTray`
 - `SIGNING_IDENTITY="Developer ID Application: Your Name (TEAMID)"`
 - `NOTARY_PROFILE=AC_NOTARY`
-
-## Next Implementation Steps
-
-1. Replace mock content with real Plex API calls after auth.
-2. Add image caching + robust request/error handling.
-3. Improve queue behavior (repeat and smarter previous behavior).
-4. Add richer now playing metadata sync from active stream events.

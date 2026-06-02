@@ -7,7 +7,16 @@ final class LibraryStore: ObservableObject {
     @Published var recentlyAddedAlbums: [PlexAlbum] = []
     @Published var playlists: [PlexPlaylist] = []
     @Published var stations: [PlexStation] = []
-    @Published var isLoadingLibrary = false
+    @Published var isLoadingLibrary = false {
+        didSet {
+            if !isLoadingLibrary, oldValue, libraryLoadError == nil,
+               context.playbackEngine?.currentTrack == nil {
+                Task {
+                    await ensureLastPlayedTrack()
+                }
+            }
+        }
+    }
     @Published var libraryLoadError: String?
     @Published var availableServers: [PlexServer] = []
     @Published var availableLibraries: [PlexMusicLibrary] = []
@@ -146,7 +155,7 @@ final class LibraryStore: ObservableObject {
             context.settingsStore.settings.selectedLibraryID = library.id
             logDebug("Using library: \(library.title)")
 
-            try await loadLibraryContent(server: server, library: library, userToken: userToken, preserveCurrentPlayback: false)
+            try await loadLibraryContent(server: server, library: library, userToken: userToken)
             logDebug("Library load completed")
         } catch {
             libraryLoadError = error.localizedDescription
@@ -220,7 +229,7 @@ final class LibraryStore: ObservableObject {
 
             context.settingsStore.settings.selectedLibraryID = library.id
             logDebug("Using library: \(library.title)")
-            try await loadLibraryContent(server: selectedServer, library: library, userToken: userToken, preserveCurrentPlayback: false)
+            try await loadLibraryContent(server: selectedServer, library: library, userToken: userToken)
             logDebug("Server switch completed")
         } catch {
             libraryLoadError = error.localizedDescription
@@ -245,7 +254,7 @@ final class LibraryStore: ObservableObject {
         do {
             logDebug("Using server: \(server.name)")
             logDebug("Using library: \(library.title)")
-            try await loadLibraryContent(server: server, library: library, userToken: userToken, preserveCurrentPlayback: false)
+            try await loadLibraryContent(server: server, library: library, userToken: userToken)
             logDebug("Library switch completed")
         } catch {
             libraryLoadError = error.localizedDescription
@@ -290,7 +299,7 @@ final class LibraryStore: ObservableObject {
 
             context.settingsStore.settings.selectedLibraryID = library.id
             logDebug("Using library: \(library.title)")
-            try await loadLibraryContent(server: server, library: library, userToken: userToken, preserveCurrentPlayback: true)
+            try await loadLibraryContent(server: server, library: library, userToken: userToken)
             logDebug("Refresh completed")
         } catch {
             libraryLoadError = error.localizedDescription
@@ -301,20 +310,9 @@ final class LibraryStore: ObservableObject {
         currentLoadingMessage = nil
     }
 
-    private func loadLibraryContent(server: PlexServer, library: PlexMusicLibrary, userToken: String, preserveCurrentPlayback: Bool) async throws {
+    private func loadLibraryContent(server: PlexServer, library: PlexMusicLibrary, userToken: String) async throws {
         logDebug("Fetching home content")
         try await reloadHomeContent(server: server, library: library, userToken: userToken)
-
-        if preserveCurrentPlayback,
-           selectedServerID == server.id,
-           selectedLibraryID == library.id,
-           context.playbackEngine?.currentTrack != nil {
-            logDebug("Preserving current playback for refresh")
-            return
-        }
-
-        logDebug("Fetching last played track")
-        await prepareLastPlayedTrack(server: server, library: library, userToken: userToken)
     }
 
     private func reloadHomeContent(server: PlexServer, library: PlexMusicLibrary, userToken: String) async throws {
@@ -332,19 +330,25 @@ final class LibraryStore: ObservableObject {
         logDebug("Loaded \(recentlyPlayedAlbums.count) recent played, \(recentlyAddedAlbums.count) recent added, \(playlists.count) playlists, \(stations.count) stations")
     }
 
-    private func prepareLastPlayedTrack(server: PlexServer, library: PlexMusicLibrary, userToken: String) async {
+    private func ensureLastPlayedTrack() async {
+        guard let lastAlbum = recentlyPlayedAlbums.first,
+              let server = selectedServer,
+              let userToken = context.plexService.authService.authToken else {
+            return
+        }
+
         context.playbackEngine?.resetForNewTrack()
 
         do {
-            guard let lastPlayedTrack = try await context.plexService.fetchLastPlayedTrack(server: server, library: library, userToken: userToken) else {
-                logDebug("No last played track found")
+            let tracks = try await context.plexService.fetchAlbumTracks(server: server, album: lastAlbum, userToken: userToken)
+            guard let firstTrack = tracks.first else {
+                logDebug("No tracks found in last played album")
                 return
             }
-
-            context.playbackEngine?.preparePreviewTrack(lastPlayedTrack)
-            logDebug("Prepared last played track: \(lastPlayedTrack.title)")
+            context.playbackEngine?.preparePreviewTrack(firstTrack)
+            logDebug("Prepared last played track: \(firstTrack.title)")
         } catch {
-            logDebug("Last played track lookup failed: \(error.localizedDescription)")
+            logDebug("Last played album track lookup failed: \(error.localizedDescription)")
         }
     }
 

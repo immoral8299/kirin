@@ -64,15 +64,22 @@ struct PlexContentService {
 
     func fetchLastPlayedTrack(server: PlexServer, library: PlexMusicLibrary, userToken: String) async throws -> PlexTrack? {
         let token = server.accessToken ?? userToken
-        let query = [
-            URLQueryItem(name: "type", value: "10"),
+
+        let albumQuery = [
+            URLQueryItem(name: "type", value: "9"),
             URLQueryItem(name: "X-Plex-Container-Start", value: "0"),
             URLQueryItem(name: "X-Plex-Container-Size", value: "1"),
         ]
+        let albumURL = client.buildURL(base: server.baseURL, path: "library/sections/\(library.id)/recentlyViewed", query: albumQuery)
+        let albumData = try await client.request(url: albumURL, token: token)
+        let albums = try parseAlbums(data: albumData, server: server, token: token)
+        guard let lastAlbum = albums.first else {
+            return nil
+        }
 
-        let url = client.buildURL(base: server.baseURL, path: "library/sections/\(library.id)/recentlyViewed", query: query)
-        let data = try await client.request(url: url, token: token)
-        return try parseTracks(data: data, server: server, token: token).first
+        let tracksURL = client.buildURL(base: server.baseURL, path: "library/metadata/\(lastAlbum.id)/children")
+        let tracksData = try await client.request(url: tracksURL, token: token)
+        return try parseTracks(data: tracksData, server: server, token: token).first
     }
 
     func fetchAlbumTracks(server: PlexServer, album: PlexAlbum, userToken: String) async throws -> [PlexTrack] {
@@ -143,7 +150,7 @@ struct PlexContentService {
                 return nil
             }
 
-            let streamURL = streamURL(from: streamPart, server: server, token: token)
+            let streamURL = plexStreamURL(from: streamPart, server: server, token: token)
             let artworkPath = node.string(for: ["thumb", "parentThumb", "grandparentThumb", "art"])
 
             return PlexTrack(
@@ -156,7 +163,7 @@ struct PlexContentService {
                 trackArtist: node.string(for: ["originalTitle", "grandparentTitle"]),
                 albumArtist: node.string(for: ["grandparentTitle", "parentTitle"]),
                 albumName: node.string(for: ["parentTitle"]) ?? "Unknown Album",
-                artworkURL: artworkURL(from: artworkPath, server: server, token: token),
+                artworkURL: plexArtworkURL(from: artworkPath, server: server, token: token),
                 trackNumber: node.int(for: ["index"]),
                 discNumber: node.int(for: ["parentIndex"]),
                 streamURL: streamURL
@@ -182,7 +189,7 @@ struct PlexContentService {
                 return nil
             }
 
-            let streamURL = streamURL(from: streamPart, server: server, token: token)
+            let streamURL = plexStreamURL(from: streamPart, server: server, token: token)
             let artworkPath = node.string(for: ["thumb", "parentThumb", "grandparentThumb", "art"])
 
             return PlexTrack(
@@ -195,7 +202,7 @@ struct PlexContentService {
                 trackArtist: node.string(for: ["originalTitle", "grandparentTitle"]),
                 albumArtist: node.string(for: ["grandparentTitle", "parentTitle"]),
                 albumName: node.string(for: ["parentTitle"]) ?? "Unknown Album",
-                artworkURL: artworkURL(from: artworkPath, server: server, token: token),
+                artworkURL: plexArtworkURL(from: artworkPath, server: server, token: token),
                 trackNumber: node.int(for: ["index"]),
                 discNumber: node.int(for: ["parentIndex"]),
                 streamURL: streamURL
@@ -228,7 +235,7 @@ struct PlexContentService {
             id: id,
             title: title,
             artist: artist,
-            artworkURL: artworkURL(from: artworkPath, server: server, token: token)
+            artworkURL: plexArtworkURL(from: artworkPath, server: server, token: token)
         )
     }
 

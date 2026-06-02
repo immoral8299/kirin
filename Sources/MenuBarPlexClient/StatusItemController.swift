@@ -3,10 +3,11 @@ import Combine
 import SwiftUI
 
 @MainActor
-final class StatusItemController {
+final class StatusItemController: NSObject {
     private let initialStatusIconName = PlaybackState.buffering.statusSystemImageName
     private let initialStatusText = "Initializing..."
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+    private let appState: AppState
     private let iconView = NSImageView(frame: .zero)
     private let marqueeView = StatusMarqueeView(frame: .zero)
     private let stackView = NSStackView(frame: .zero)
@@ -26,6 +27,7 @@ final class StatusItemController {
     private let panelSize = NSSize(width: 460, height: 520)
 
     init(appState: AppState) {
+        self.appState = appState
         panelContainerView = Self.makePanelContainerView()
         rootView = NSHostingView(rootView: MenuBarRootView(appState: appState, onClose: {}, onTabChange: { _ in }))
         panel = NSPanel(
@@ -34,9 +36,11 @@ final class StatusItemController {
             backing: .buffered,
             defer: false
         )
+        super.init()
         configurePanel()
         rootView.rootView = makeRootView(appState: appState)
         configureButton()
+        configureContextMenu()
         configureOutsideClickMonitoring()
         applyThemePreference(appState.themePreference)
         applyFallbackStatus()
@@ -136,6 +140,12 @@ final class StatusItemController {
             marqueeView.heightAnchor.constraint(equalToConstant: 16),
             marqueeView.widthAnchor.constraint(greaterThanOrEqualToConstant: 24),
         ])
+    }
+
+    private func configureContextMenu() {
+        let menu = PlexStatusMenu()
+        menu.delegate = self
+        marqueeView.menu = menu
     }
 
     private func configureOutsideClickMonitoring() {
@@ -241,6 +251,33 @@ final class StatusItemController {
     }
 
     @objc
+    private func playPauseAction() {
+        appState.togglePlayback()
+    }
+
+    @objc
+    private func previousTrackAction() {
+        appState.previousTrack()
+    }
+
+    @objc
+    private func nextTrackAction() {
+        appState.nextTrack()
+    }
+
+    @objc
+    fileprivate func toggleShuffleAction(_ sender: NSMenuItem) {
+        appState.toggleShuffle()
+        sender.title = appState.isShuffleEnabled ? "Disable Shuffle" : "Enable Shuffle"
+    }
+
+    @objc
+    private func playStationAction(_ sender: NSMenuItem) {
+        guard let station = sender.representedObject as? PlexStation else { return }
+        appState.playStation(station)
+    }
+
+    @objc
     private func togglePopover(_ sender: Any?) {
         if panel.isVisible {
             panel.orderOut(sender)
@@ -288,11 +325,11 @@ final class StatusMarqueeView: NSView {
     }
 
     private let font = NSFont.systemFont(ofSize: 13, weight: .regular)
-    private let horizontalTextPadding: CGFloat = 4
+    private let horizontalTextPadding: CGFloat = 2
     private let textLabel = NSTextField(labelWithString: "")
 
     var visibleWidth: CGFloat {
-        max(24, textWidth + (horizontalTextPadding * 2))
+        max(24, textWidth + horizontalTextPadding)
     }
 
     override init(frame frameRect: NSRect) {
@@ -337,5 +374,58 @@ final class StatusMarqueeView: NSView {
 
     private func verticallyCenteredY(for label: NSTextField) -> CGFloat {
         floor((bounds.height - label.fittingSize.height) / 2)
+    }
+}
+
+// MARK: - NSMenuDelegate
+
+private final class PlexStatusMenu: NSMenu {
+    override func cancelTracking() {
+        if let item = highlightedItem, item.action == #selector(StatusItemController.toggleShuffleAction(_:)) {
+            return
+        }
+        super.cancelTracking()
+    }
+
+    override func cancelTrackingWithoutAnimation() {
+        if let item = highlightedItem, item.action == #selector(StatusItemController.toggleShuffleAction(_:)) {
+            return
+        }
+        super.cancelTrackingWithoutAnimation()
+    }
+}
+
+extension StatusItemController: NSMenuDelegate {
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        menu.removeAllItems()
+
+        let isPlaying = appState.playbackState == .playing
+        let playPauseItem = menu.addItem(withTitle: isPlaying ? "Pause" : "Play", action: #selector(playPauseAction), keyEquivalent: "")
+        playPauseItem.target = self
+        playPauseItem.image = NSImage(systemSymbolName: isPlaying ? "pause.fill" : "play.fill", accessibilityDescription: nil)
+
+        let previousItem = menu.addItem(withTitle: "Previous", action: #selector(previousTrackAction), keyEquivalent: "")
+        previousItem.target = self
+        previousItem.image = NSImage(systemSymbolName: "backward.fill", accessibilityDescription: nil)
+
+        let nextItem = menu.addItem(withTitle: "Next", action: #selector(nextTrackAction), keyEquivalent: "")
+        nextItem.target = self
+        nextItem.image = NSImage(systemSymbolName: "forward.fill", accessibilityDescription: nil)
+
+        let shuffleTitle = appState.isShuffleEnabled ? "Disable Shuffle" : "Enable Shuffle"
+        let shuffleItem = menu.addItem(withTitle: shuffleTitle, action: #selector(toggleShuffleAction(_:)), keyEquivalent: "")
+        shuffleItem.target = self
+        shuffleItem.image = NSImage(systemSymbolName: "shuffle", accessibilityDescription: nil)
+
+        let stations = appState.stations.prefix(2)
+        if !stations.isEmpty {
+            menu.addItem(.separator())
+            for station in stations {
+                let item = menu.addItem(withTitle: station.title, action: #selector(playStationAction(_:)), keyEquivalent: "")
+                item.target = self
+                item.representedObject = station
+                item.image = NSImage(systemSymbolName: "radio.fill", accessibilityDescription: nil)
+            }
+        }
     }
 }

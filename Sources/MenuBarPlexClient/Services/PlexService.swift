@@ -283,12 +283,12 @@ final class PlexService: MediaService {
 
     func streamURL(from path: String) -> URL {
         guard let server = _selectedServer else { return URL(string: "about:blank")! }
-        return MenuBarPlexClient.streamURL(from: path, server: server, token: authService.authToken)
+        return plexStreamURL(from: path, server: server, token: authService.authToken)
     }
 
     func artworkURL(from path: String?) -> URL? {
         guard let server = _selectedServer else { return nil }
-        return MenuBarPlexClient.artworkURL(from: path, server: server, token: authService.authToken)
+        return plexArtworkURL(from: path, server: server, token: authService.authToken)
     }
 
     func fetchLoudnessGain(ratingKey: String) async throws -> Float? {

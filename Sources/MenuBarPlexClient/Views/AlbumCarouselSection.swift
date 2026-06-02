@@ -50,7 +50,7 @@ struct AlbumCarouselSection: View {
                 }
                 .frame(width: MenuBarLayout.contentWidth - 2, alignment: .leading)
             }
-            .onChange(of: items.count) { _, _ in
+            .onChange(of: items.count) { _ in
                 page = min(page, maxPage)
             }
         }
