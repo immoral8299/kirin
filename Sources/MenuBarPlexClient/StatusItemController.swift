@@ -166,7 +166,7 @@ final class StatusItemController {
             }
             .store(in: &cancellables)
 
-        appState.$shouldPresentInitialLoadFailure
+        appState.libraryStore.$shouldPresentInitialLoadFailure
             .filter { $0 }
             .sink { [weak self, weak appState] _ in
                 guard let self, let appState else { return }
