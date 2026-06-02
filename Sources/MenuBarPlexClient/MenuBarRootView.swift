@@ -7,10 +7,17 @@ private enum MenuBarLayout {
     static let minPopupHeight: CGFloat = 400
 }
 
+private enum ContentTab {
+    case home
+    case queue
+    case settings
+}
+
 struct MenuBarRootView: View {
     @ObservedObject var appState: AppState
     let onClose: () -> Void
-    @State private var showingSettings = false
+    let onTabChange: (Bool) -> Void
+    @State private var selectedTab: ContentTab = .home
 
     var body: some View {
         VStack(spacing: 0) {
@@ -38,7 +45,8 @@ struct MenuBarRootView: View {
                 endPoint: .bottomTrailing
             )
         )
-        .foregroundStyle(.white)
+        .foregroundStyle(.primary)
+        .preferredColorScheme(appState.themePreference.colorScheme)
     }
 
     @ViewBuilder
@@ -65,11 +73,39 @@ struct MenuBarRootView: View {
                 )
             }
 
-            if showingSettings {
+            switch selectedTab {
+            case .settings:
                 SettingsView(appState: appState)
                     .frame(width: MenuBarLayout.contentWidth, alignment: .leading)
                     .background(AppTheme.panelFillSoft, in: RoundedRectangle(cornerRadius: AppCornerRadius.medium, style: .continuous))
-            } else if !appState.shouldPromptForServerSelection {
+            case .queue:
+                if !appState.shouldPromptForServerSelection {
+                    if !appState.relatedAlbums.isEmpty {
+                        RelatedAlbumsSection(
+                            albums: appState.relatedAlbums,
+                            onSelect: appState.playAlbum,
+                            onPlayNext: { appState.enqueueAlbum($0, playNext: true) },
+                            onAddToQueue: { appState.enqueueAlbum($0, playNext: false) }
+                        )
+                    }
+                    PlayQueueView(appState: appState)
+                }
+            case .home:
+                if !appState.shouldPromptForServerSelection {
+                    homeContent
+                }
+            }
+        } else {
+            LoginPromptCard(
+                authState: appState.authService.status.state,
+                onConnect: appState.beginPlexLogin,
+                onOpenBrowser: appState.authService.reopenBrowser
+            )
+        }
+    }
+
+    @ViewBuilder
+    private var homeContent: some View {
                 let visibility = appState.settingsStore.settings.sectionVisibility
 
                 if visibility.showRecentlyPlayedAlbums && !appState.recentlyPlayedAlbums.isEmpty {
@@ -77,7 +113,9 @@ struct MenuBarRootView: View {
                         title: "Recently Played",
                         items: appState.recentlyPlayedAlbums,
                         pageSize: 4,
-                        onSelect: appState.playAlbum
+                        onSelect: appState.playAlbum,
+                        onPlayNext: { appState.enqueueAlbum($0, playNext: true) },
+                        onAddToQueue: { appState.enqueueAlbum($0, playNext: false) }
                     )
                 }
 
@@ -86,7 +124,9 @@ struct MenuBarRootView: View {
                         title: "Recently Added",
                         items: appState.recentlyAddedAlbums,
                         pageSize: 4,
-                        onSelect: appState.playAlbum
+                        onSelect: appState.playAlbum,
+                        onPlayNext: { appState.enqueueAlbum($0, playNext: true) },
+                        onAddToQueue: { appState.enqueueAlbum($0, playNext: false) }
                     )
                 }
 
@@ -94,8 +134,10 @@ struct MenuBarRootView: View {
                     PlaylistCarouselSection(
                         title: "Playlists",
                         items: appState.playlists,
-                        pageSize: 8,
-                        onSelect: appState.playPlaylist
+                        pageSize: 4,
+                        onSelect: appState.playPlaylist,
+                        onPlayNext: { appState.enqueuePlaylist($0, playNext: true) },
+                        onAddToQueue: { appState.enqueuePlaylist($0, playNext: false) }
                     )
                 }
 
@@ -103,8 +145,10 @@ struct MenuBarRootView: View {
                     StationCarouselSection(
                         title: "Stations",
                         items: appState.stations,
-                        pageSize: 8,
-                        onSelect: appState.playStation
+                        pageSize: 4,
+                        onSelect: appState.playStation,
+                        onPlayNext: { appState.enqueueStation($0, playNext: true) },
+                        onAddToQueue: { appState.enqueueStation($0, playNext: false) }
                     )
                 }
 
@@ -115,14 +159,6 @@ struct MenuBarRootView: View {
                    appState.stations.isEmpty {
                     EmptyLibraryCard()
                 }
-            }
-        } else {
-            LoginPromptCard(
-                authState: appState.authService.status.state,
-                onConnect: appState.beginPlexLogin,
-                onOpenBrowser: appState.authService.reopenBrowser
-            )
-        }
     }
 
     private var topBar: some View {
@@ -136,24 +172,47 @@ struct MenuBarRootView: View {
             .focusable(false)
             .interactiveCursor()
 
-            Text(showingSettings ? "PlexTray / Settings" : "PlexTray")
+            Text(tabTitle)
                 .font(.system(size: 14, weight: .bold, design: .rounded))
 
             Spacer()
 
             authButton
 
-            Button {
-                showingSettings.toggle()
-            } label: {
-                Image(systemName: showingSettings ? "xmark.circle" : "gearshape")
+            if appState.isAuthenticated {
+                tabButton(.home, icon: "house", tooltip: "Home")
+                tabButton(.queue, icon: "list.bullet", tooltip: "Play Queue")
+                tabButton(.settings, icon: "gearshape", tooltip: "Settings")
             }
-            .buttonStyle(.plain)
-            .focusable(false)
-            .interactiveCursor()
-            .foregroundStyle(.white.opacity(0.8))
         }
         .frame(width: MenuBarLayout.contentWidth, alignment: .leading)
+    }
+
+    private var tabTitle: String {
+        switch selectedTab {
+        case .home:
+            return "PlexTray"
+        case .queue:
+            return "PlexTray / Queue"
+        case .settings:
+            return "PlexTray / Settings"
+        }
+    }
+
+    private func tabButton(_ tab: ContentTab, icon: String, tooltip: String) -> some View {
+        Button {
+            selectedTab = tab
+            onTabChange(tab == .settings)
+        } label: {
+            Image(systemName: icon)
+                .frame(width: 24, height: 24)
+                .background(selectedTab == tab ? AppTheme.overlayStrong : .clear, in: RoundedRectangle(cornerRadius: AppCornerRadius.compact, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .focusable(false)
+        .interactiveCursor()
+        .foregroundStyle(selectedTab == tab ? AppTheme.accent : Color.secondary.opacity(0.8))
+        .help(tooltip)
     }
 
     @ViewBuilder
@@ -175,7 +234,7 @@ struct MenuBarRootView: View {
                         .controlSize(.small)
                     Text("Refreshing...")
                         .font(.system(size: 10, weight: .medium, design: .rounded))
-                        .foregroundStyle(.white.opacity(0.68))
+                        .foregroundStyle(.secondary.opacity(0.68))
                 }
 
                 Button {
@@ -208,7 +267,7 @@ struct MenuBarRootView: View {
                 if let loadingTargetDescription = appState.loadingTargetDescription {
                     Text(loadingTargetDescription)
                         .font(.system(size: 10, weight: .medium, design: .rounded))
-                        .foregroundStyle(.white.opacity(0.68))
+                        .foregroundStyle(.secondary.opacity(0.68))
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
@@ -233,7 +292,7 @@ struct MenuBarRootView: View {
                     .buttonStyle(.plain)
                     .focusable(false)
                     .interactiveCursor()
-                    .foregroundStyle(.white.opacity(0.72))
+                    .foregroundStyle(.secondary.opacity(0.72))
                 }
             }
             .padding(8)
@@ -264,7 +323,7 @@ private struct EmptyLibraryCard: View {
 
             Text("No recent albums or playlists were returned for the selected library yet. Try another library in settings or refresh.")
                 .font(.system(size: 12, weight: .medium, design: .rounded))
-                .foregroundStyle(.white.opacity(0.75))
+                .foregroundStyle(.secondary.opacity(0.75))
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
@@ -282,7 +341,7 @@ private struct ChooseServerCard: View {
 
             Text("Choose a Plex server to use as your default. You can change it later in settings.")
                 .font(.system(size: 12, weight: .medium, design: .rounded))
-                .foregroundStyle(.white.opacity(0.76))
+                .foregroundStyle(.secondary.opacity(0.76))
 
             VStack(spacing: 8) {
                 ForEach(appState.availableServers) { server in
@@ -297,7 +356,7 @@ private struct ChooseServerCard: View {
                             Spacer()
                             Image(systemName: "chevron.right")
                                 .font(.system(size: 11, weight: .bold))
-                                .foregroundStyle(.white.opacity(0.5))
+                                .foregroundStyle(.secondary.opacity(0.5))
                         }
                         .padding(.horizontal, 12)
                         .padding(.vertical, 11)
@@ -314,7 +373,7 @@ private struct ChooseServerCard: View {
             if let error = appState.libraryLoadError {
                 Text(error)
                     .font(.system(size: 11, weight: .medium, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.72))
+                    .foregroundStyle(.secondary.opacity(0.72))
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -343,7 +402,7 @@ private struct LoginPromptCard: View {
 
             Text("Sign in via your browser to load your server, music library, and playlists.")
                 .font(.system(size: 12, weight: .medium, design: .rounded))
-                .foregroundStyle(.white.opacity(0.78))
+                .foregroundStyle(.secondary.opacity(0.78))
 
             switch authState {
             case .requestingPin:
@@ -364,7 +423,7 @@ private struct LoginPromptCard: View {
 
                     Text("Code: \(code)")
                         .font(.system(size: 11, weight: .medium, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.75))
+                        .foregroundStyle(.secondary.opacity(0.75))
 
                     Button("Open Browser Again") {
                         onOpenBrowser()
@@ -402,7 +461,7 @@ private struct LoginPromptCard: View {
             .padding(.vertical, 8)
             .interactiveCursor()
             .background(AppTheme.accent, in: Capsule())
-            .foregroundStyle(.black)
+            .foregroundStyle(AppTheme.onAccent)
         }
 }
 
@@ -430,16 +489,27 @@ private struct NowPlayingCard: View {
 
                 VStack(alignment: .leading, spacing: 10) {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(metadata.trackName)
-                            .font(.system(size: 17, weight: .semibold, design: .rounded))
-                            .lineLimit(1)
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            Text(metadata.trackName)
+                                .font(.system(size: 17, weight: .semibold, design: .rounded))
+                                .lineLimit(1)
+
+                            Spacer(minLength: 0)
+
+                            if let trackNumberLabel {
+                                Text(trackNumberLabel)
+                                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                                    .foregroundStyle(.secondary.opacity(0.68))
+                                    .lineLimit(1)
+                            }
+                        }
                         Text(metadata.resolvedTrackArtist)
                             .font(.system(size: 13, weight: .medium, design: .rounded))
-                            .foregroundStyle(.white.opacity(0.82))
+                            .foregroundStyle(.secondary.opacity(0.82))
                             .lineLimit(1)
                         Text(metadata.albumName)
                             .font(.system(size: 12, weight: .regular, design: .rounded))
-                            .foregroundStyle(.white.opacity(0.68))
+                            .foregroundStyle(.secondary.opacity(0.68))
                             .lineLimit(1)
                     }
 
@@ -457,7 +527,8 @@ private struct NowPlayingCard: View {
                     }
                     .frame(maxWidth: .infinity, alignment: .center)
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .frame(height: 128, alignment: .topLeading)
             }
 
             VStack(spacing: 4) {
@@ -483,7 +554,7 @@ private struct NowPlayingCard: View {
                     Text(formattedTime(playbackDuration))
                 }
                 .font(.system(size: 10, weight: .medium, design: .rounded))
-                .foregroundStyle(.white.opacity(0.68))
+                .foregroundStyle(.secondary.opacity(0.68))
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -519,7 +590,17 @@ private struct NowPlayingCard: View {
         }
         .buttonStyle(.plain)
         .interactiveCursor()
-        .foregroundStyle(isActive ? AppTheme.accent : .white)
+        .foregroundStyle(isActive ? AppTheme.accent : Color.primary)
+    }
+
+    private var trackNumberLabel: String? {
+        guard let trackNumber = metadata.trackNumber else { return nil }
+
+        if let discNumber = metadata.discNumber {
+            return "\(discNumber).\(trackNumber)"
+        }
+
+        return "Nr. \(trackNumber)"
     }
 
     private func formattedTime(_ seconds: Double) -> String {
@@ -536,6 +617,8 @@ private struct AlbumCarouselSection: View {
     let items: [PlexAlbum]
     let pageSize: Int
     let onSelect: (PlexAlbum) -> Void
+    let onPlayNext: (PlexAlbum) -> Void
+    let onAddToQueue: (PlexAlbum) -> Void
     @State private var page = 0
 
     var body: some View {
@@ -557,7 +640,7 @@ private struct AlbumCarouselSection: View {
                                         .lineLimit(1)
                                     Text(album.artist)
                                         .font(.system(size: 11, weight: .regular, design: .rounded))
-                                        .foregroundStyle(.white.opacity(0.72))
+                                        .foregroundStyle(.secondary.opacity(0.72))
                                         .lineLimit(1)
                                 }
                             }
@@ -565,6 +648,11 @@ private struct AlbumCarouselSection: View {
                             .interactiveCursor()
                             .contentShape(Rectangle())
                             .frame(width: 100, alignment: .leading)
+                            .contextMenu {
+                                Button("Play Now") { onSelect(album) }
+                                Button("Play Next") { onPlayNext(album) }
+                                Button("Add to Queue") { onAddToQueue(album) }
+                            }
                         } else {
                             Color.clear
                                 .frame(width: 100, height: 136)
@@ -622,10 +710,10 @@ private struct ArtworkImage: View {
     }
 
     private func placeholder(isLoading: Bool) -> some View {
-        Color.white.opacity(0.12)
+        AppTheme.artworkPlaceholder
             .overlay {
                 Image(systemName: placeholderSystemImage)
-                    .foregroundStyle(.white.opacity(0.55))
+                    .foregroundStyle(.secondary.opacity(0.55))
             }
             .overlay {
                 if isLoading {
@@ -641,6 +729,8 @@ private struct PlaylistCarouselSection: View {
     let items: [PlexPlaylist]
     let pageSize: Int
     let onSelect: (PlexPlaylist) -> Void
+    let onPlayNext: (PlexPlaylist) -> Void
+    let onAddToQueue: (PlexPlaylist) -> Void
     @State private var page = 0
 
     var body: some View {
@@ -649,8 +739,8 @@ private struct PlaylistCarouselSection: View {
                 VStack(spacing: 8) {
                     ForEach(0..<2, id: \.self) { row in
                         HStack(spacing: 8) {
-                            ForEach(0..<4, id: \.self) { column in
-                                let index = row * 4 + column
+                            ForEach(0..<2, id: \.self) { column in
+                                let index = row * 2 + column
                                 if let playlist = currentItems[index] {
                                     Button {
                                         onSelect(playlist)
@@ -661,18 +751,23 @@ private struct PlaylistCarouselSection: View {
                                                 .lineLimit(1)
                                             Text("\(playlist.trackCount) tracks")
                                                 .font(.system(size: 10, weight: .regular, design: .rounded))
-                                                .foregroundStyle(.white.opacity(0.74))
+                                                .foregroundStyle(.secondary.opacity(0.74))
                                         }
                                         .padding(8)
-                                        .frame(width: 101, alignment: .leading)
+                                        .frame(width: 210, alignment: .leading)
                                         .background(AppTheme.panelFill, in: RoundedRectangle(cornerRadius: AppCornerRadius.compact, style: .continuous))
                                     }
                                     .buttonStyle(.plain)
                                     .interactiveCursor()
                                     .contentShape(Rectangle())
+                                    .contextMenu {
+                                        Button("Play Now") { onSelect(playlist) }
+                                        Button("Play Next") { onPlayNext(playlist) }
+                                        Button("Add to Queue") { onAddToQueue(playlist) }
+                                    }
                                 } else {
                                     Color.clear
-                                        .frame(width: 101, height: 56)
+                                        .frame(width: 210, height: 56)
                                 }
                             }
                         }
@@ -712,6 +807,8 @@ private struct StationCarouselSection: View {
     let items: [PlexStation]
     let pageSize: Int
     let onSelect: (PlexStation) -> Void
+    let onPlayNext: (PlexStation) -> Void
+    let onAddToQueue: (PlexStation) -> Void
     @State private var page = 0
 
     var body: some View {
@@ -720,8 +817,8 @@ private struct StationCarouselSection: View {
                 VStack(spacing: 8) {
                     ForEach(0..<2, id: \.self) { row in
                         HStack(spacing: 8) {
-                            ForEach(0..<4, id: \.self) { column in
-                                let index = row * 4 + column
+                            ForEach(0..<2, id: \.self) { column in
+                                let index = row * 2 + column
                                 if let station = currentItems[index] {
                                     Button {
                                         onSelect(station)
@@ -734,15 +831,20 @@ private struct StationCarouselSection: View {
                                                 .lineLimit(2)
                                         }
                                         .padding(8)
-                                        .frame(width: 101, height: 56, alignment: .leading)
+                                        .frame(width: 210, height: 56, alignment: .leading)
                                         .background(AppTheme.panelFill, in: RoundedRectangle(cornerRadius: AppCornerRadius.compact, style: .continuous))
                                     }
                                     .buttonStyle(.plain)
                                     .interactiveCursor()
                                     .contentShape(Rectangle())
+                                    .contextMenu {
+                                        Button("Play Now") { onSelect(station) }
+                                        Button("Play Next") { onPlayNext(station) }
+                                        Button("Add to Queue") { onAddToQueue(station) }
+                                    }
                                 } else {
                                     Color.clear
-                                        .frame(width: 101, height: 56)
+                                        .frame(width: 210, height: 56)
                                 }
                             }
                         }
@@ -795,7 +897,7 @@ private struct CarouselContainer<Content: View>: View {
                 if maxPage > 0 {
                     Text("\(page + 1)/\(maxPage + 1)")
                         .font(.system(size: 10, weight: .medium, design: .rounded))
-                        .foregroundStyle(.white.opacity(0.68))
+                        .foregroundStyle(.secondary.opacity(0.68))
 
                     Button {
                         page = max(0, page - 1)
@@ -823,6 +925,221 @@ private struct CarouselContainer<Content: View>: View {
     }
 }
 
+private struct RelatedAlbumsSection: View {
+    let albums: [PlexAlbum]
+    let onSelect: (PlexAlbum) -> Void
+    let onPlayNext: (PlexAlbum) -> Void
+    let onAddToQueue: (PlexAlbum) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Related Albums")
+                .font(.system(size: 12, weight: .bold, design: .rounded))
+
+            HStack(alignment: .top, spacing: 10) {
+                ForEach(Array(albums.prefix(3))) { album in
+                    VStack(alignment: .leading, spacing: 6) {
+                        Button {
+                            onSelect(album)
+                        } label: {
+                            VStack(alignment: .leading, spacing: 5) {
+                                ArtworkImage(url: album.artworkURL, placeholderSystemImage: "music.note")
+                                    .frame(width: 100, height: 100)
+                                    .clipShape(RoundedRectangle(cornerRadius: AppCornerRadius.small, style: .continuous))
+
+                                Text(album.title)
+                                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                                    .lineLimit(1)
+                                Text(album.artist)
+                                    .font(.system(size: 10, weight: .regular, design: .rounded))
+                                    .foregroundStyle(.secondary.opacity(0.72))
+                                    .lineLimit(1)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .interactiveCursor()
+
+                        HStack(spacing: 6) {
+                            albumQueueButton(icon: "text.line.first.and.arrowtriangle.forward", help: "Play Album Next") {
+                                onPlayNext(album)
+                            }
+                            albumQueueButton(icon: "text.badge.plus", help: "Add Album to Queue") {
+                                onAddToQueue(album)
+                            }
+                        }
+                    }
+                    .frame(width: 100, alignment: .leading)
+                }
+            }
+        }
+        .frame(width: MenuBarLayout.contentWidth, alignment: .leading)
+    }
+
+    private func albumQueueButton(icon: String, help: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.system(size: 11, weight: .semibold))
+                .frame(width: 28, height: 24)
+                .background(AppTheme.panelFill, in: RoundedRectangle(cornerRadius: AppCornerRadius.compact, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(AppTheme.accent)
+        .interactiveCursor()
+        .help(help)
+    }
+}
+
+private struct PlayQueueView: View {
+    @ObservedObject var appState: AppState
+    @State private var showsPlayedTracks = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("Play Queue")
+                    .font(.system(size: 12, weight: .bold, design: .rounded))
+
+                Spacer()
+
+                if appState.isQueueOperationInProgress {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+
+                Button {
+                    appState.refreshPlayQueue()
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .buttonStyle(.plain)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(AppTheme.accent)
+                .disabled(!appState.hasEditablePlayQueue || appState.isQueueOperationInProgress)
+                .interactiveCursor(disabled: !appState.hasEditablePlayQueue || appState.isQueueOperationInProgress)
+                .help("Refresh Play Queue")
+
+                Button {
+                    appState.clearUpcomingPlayQueueTracks()
+                } label: {
+                    Image(systemName: "trash")
+                }
+                .buttonStyle(.plain)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.red.opacity(0.9))
+                .disabled(!hasUpcomingTracks || appState.isQueueOperationInProgress)
+                .interactiveCursor(disabled: !hasUpcomingTracks || appState.isQueueOperationInProgress)
+                .help("Clear Upcoming Tracks")
+            }
+
+            if !playedTracks.isEmpty {
+                Button {
+                    showsPlayedTracks.toggle()
+                } label: {
+                    Label("Played tracks", systemImage: showsPlayedTracks ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(AppTheme.accent)
+                .interactiveCursor()
+            }
+
+            if !displayedTracks.isEmpty {
+                VStack(spacing: 0) {
+                    ForEach(Array(displayedTracks.enumerated()), id: \.element.id) { index, track in
+                        queueRow(track)
+                        if index < displayedTracks.count - 1 {
+                            Divider()
+                                .overlay(AppTheme.settingsDivider)
+                                .padding(.horizontal, 10)
+                        }
+                    }
+                }
+                .background(AppTheme.panelFill, in: RoundedRectangle(cornerRadius: AppCornerRadius.card, style: .continuous))
+            } else {
+                Text("Start playback from an album, playlist, or station to create an editable queue.")
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .foregroundStyle(.secondary.opacity(0.74))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(14)
+                    .background(AppTheme.panelFill, in: RoundedRectangle(cornerRadius: AppCornerRadius.card, style: .continuous))
+            }
+        }
+        .frame(width: MenuBarLayout.contentWidth, alignment: .leading)
+    }
+
+    private func queueRow(_ track: PlexTrack) -> some View {
+        let isCurrent = track.id == appState.currentPlayQueueTrackID
+        let isUpcoming = appState.visiblePlayQueue.firstIndex(where: { $0.id == track.id }).map { $0 > currentTrackIndex } ?? false
+
+        return HStack(spacing: 8) {
+            Image(systemName: isCurrent ? "speaker.wave.2.fill" : "line.3.horizontal")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(isCurrent ? AppTheme.accent : Color.secondary.opacity(0.55))
+                .frame(width: 16)
+
+            Button {
+                appState.selectPlayQueueTrack(id: track.id)
+            } label: {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(track.title)
+                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                        .lineLimit(1)
+                    Text(track.trackArtist ?? track.albumArtist ?? track.albumName)
+                        .font(.system(size: 10, weight: .medium, design: .rounded))
+                        .foregroundStyle(.secondary.opacity(0.68))
+                        .lineLimit(1)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .buttonStyle(.plain)
+            .disabled(appState.isQueueOperationInProgress)
+
+            if isUpcoming {
+                Button {
+                    appState.removePlayQueueTrack(id: track.id)
+                } label: {
+                    Image(systemName: "trash")
+                        .font(.system(size: 11))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.red.opacity(0.85))
+                .disabled(appState.isQueueOperationInProgress)
+                .help("Remove Track from Play Queue")
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(isCurrent ? AppTheme.overlaySoft : .clear)
+        .draggable(track.id)
+        .dropDestination(for: String.self) { ids, _ in
+            guard let sourceID = ids.first else { return false }
+            appState.movePlayQueueTrack(id: sourceID, before: track.id)
+            return true
+        }
+    }
+
+    private var currentTrackIndex: Int {
+        appState.visiblePlayQueue.firstIndex(where: { $0.id == appState.currentPlayQueueTrackID }) ?? -1
+    }
+
+    private var playedTracks: [PlexTrack] {
+        guard currentTrackIndex > 0 else { return [] }
+        return Array(appState.visiblePlayQueue.prefix(currentTrackIndex))
+    }
+
+    private var displayedTracks: [PlexTrack] {
+        guard currentTrackIndex >= 0, !showsPlayedTracks else {
+            return appState.visiblePlayQueue
+        }
+
+        return Array(appState.visiblePlayQueue.dropFirst(currentTrackIndex))
+    }
+
+    private var hasUpcomingTracks: Bool {
+        currentTrackIndex >= 0 && currentTrackIndex < appState.visiblePlayQueue.count - 1
+    }
+}
+
 private struct SettingsView: View {
     @ObservedObject var appState: AppState
 
@@ -845,6 +1162,10 @@ private struct SettingsView: View {
                     pickerRow("Next String", selection: secondFieldBinding, items: MenuBarField.allCases.map { ($0.displayName, $0) })
                 }
 
+                settingsSection("Appearance") {
+                    pickerRow("Theme", selection: themePreferenceBinding, items: AppThemePreference.allCases.map { ($0.displayName, $0) })
+                }
+
                 settingsSection("Visible Sections") {
                     toggleRow("Recently Played Albums", isOn: showRecentlyPlayedBinding)
                     dividerRow
@@ -858,7 +1179,7 @@ private struct SettingsView: View {
                 settingsSection("Playback") {
                     toggleRow("Loudness Leveling", isOn: loudnessLevelingBinding)
                     dividerRow
-                    pickerRow("Count as Listened", selection: listenedThresholdBinding, items: listenedThresholdOptions)
+                    pickerRow("Scrobble Threshold", selection: listenedThresholdBinding, items: listenedThresholdOptions)
                 }
 
                 Button {
@@ -871,7 +1192,7 @@ private struct SettingsView: View {
                 .focusable(false)
                 .offset(x: 4)
                 .interactiveCursor()
-                .foregroundStyle(.white.opacity(0.85))
+                .foregroundStyle(.secondary.opacity(0.85))
                 .frame(maxWidth: .infinity, alignment: .leading)
 
                 Button {
@@ -899,15 +1220,18 @@ private struct SettingsView: View {
 
             Spacer()
 
-            Button("Refresh") {
+            Button {
                 appState.refreshLibraryContent()
+            } label: {
+                Image(systemName: "arrow.clockwise")
             }
             .buttonStyle(.plain)
             .focusable(false)
-            .font(.system(size: 11, weight: .semibold, design: .rounded))
+            .font(.system(size: 12, weight: .semibold))
             .interactiveCursor(disabled: !appState.isAuthenticated)
             .foregroundStyle(AppTheme.accent)
             .disabled(!appState.isAuthenticated)
+            .help("Refresh Library Content")
         }
     }
 
@@ -995,8 +1319,16 @@ private struct SettingsView: View {
         }
     }
 
+    private var themePreferenceBinding: Binding<AppThemePreference> {
+        Binding {
+            appState.themePreference
+        } set: { newValue in
+            appState.setThemePreference(newValue)
+        }
+    }
+
     private var listenedThresholdOptions: [(String, Int)] {
-        stride(from: 5, through: 100, by: 5).map { ("\($0)%", $0) }
+        stride(from: 50, through: 100, by: 5).map { ("\($0)%", $0) }
     }
 
     @ViewBuilder
@@ -1004,7 +1336,7 @@ private struct SettingsView: View {
         VStack(alignment: .leading, spacing: 10) {
             Text(title)
                 .font(.system(size: 12, weight: .bold, design: .rounded))
-                .foregroundStyle(.white)
+                .foregroundStyle(.primary)
 
             VStack(spacing: 0) {
                 content()
@@ -1024,7 +1356,7 @@ private struct SettingsView: View {
         HStack {
             Text(title)
                 .font(.system(size: 12, weight: .medium, design: .rounded))
-                .foregroundStyle(.white)
+                .foregroundStyle(.primary)
 
             Spacer()
 
@@ -1035,8 +1367,7 @@ private struct SettingsView: View {
             }
             .labelsHidden()
             .pickerStyle(.menu)
-            .tint(.white)
-            .colorScheme(.dark)
+            .tint(.primary)
             .interactiveCursor(disabled: items.isEmpty)
         }
         .padding(.horizontal, 12)
@@ -1047,7 +1378,7 @@ private struct SettingsView: View {
         HStack {
             Text(title)
                 .font(.system(size: 12, weight: .medium, design: .rounded))
-                .foregroundStyle(.white)
+                .foregroundStyle(.primary)
 
             Spacer()
 
@@ -1058,5 +1389,18 @@ private struct SettingsView: View {
         .interactiveCursor()
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
+    }
+}
+
+private extension AppThemePreference {
+    var colorScheme: ColorScheme? {
+        switch self {
+        case .system:
+            return nil
+        case .light:
+            return .light
+        case .dark:
+            return .dark
+        }
     }
 }

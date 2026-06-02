@@ -2,20 +2,30 @@ import AppKit
 import SwiftUI
 
 enum AppTheme {
-    static let backgroundTop = Color(red: 0.16, green: 0.17, blue: 0.19)
-    static let backgroundBottom = Color(red: 0.11, green: 0.12, blue: 0.14)
-    static let accent = Color(red: 0.66, green: 0.62, blue: 0.78)
+    static let backgroundTop = adaptiveColor(light: NSColor.white.withAlphaComponent(0.16), dark: NSColor.white.withAlphaComponent(0.05))
+    static let backgroundBottom = adaptiveColor(light: NSColor.white.withAlphaComponent(0.04), dark: NSColor.black.withAlphaComponent(0.12))
+    static let accent = adaptiveColor(
+        light: NSColor(red: 0.34, green: 0.27, blue: 0.52, alpha: 1),
+        dark: NSColor(red: 0.66, green: 0.62, blue: 0.78, alpha: 1)
+    )
     static let accentActiveBackground = accent.opacity(0.32)
-    static let panelFill = Color.white.opacity(0.08)
-    static let panelFillSoft = Color.white.opacity(0.06)
-    static let settingsPanelFill = Color.white.opacity(0.035)
-    static let settingsFieldFill = Color.white.opacity(0.05)
-    static let settingsDivider = Color.white.opacity(0.14)
-    static let overlaySoft = Color.black.opacity(0.18)
-    static let overlayMedium = Color.black.opacity(0.22)
-    static let overlayStrong = Color.black.opacity(0.28)
-    static let transportFill = Color.black.opacity(0.32)
-    static let panelBackground = NSColor.windowBackgroundColor.withAlphaComponent(0.96)
+    static let panelFill = adaptiveColor(light: NSColor.white.withAlphaComponent(0.42), dark: NSColor.white.withAlphaComponent(0.08))
+    static let panelFillSoft = adaptiveColor(light: NSColor.white.withAlphaComponent(0.26), dark: NSColor.white.withAlphaComponent(0.06))
+    static let settingsPanelFill = adaptiveColor(light: NSColor.white.withAlphaComponent(0.18), dark: NSColor.white.withAlphaComponent(0.035))
+    static let settingsFieldFill = adaptiveColor(light: NSColor.white.withAlphaComponent(0.32), dark: NSColor.white.withAlphaComponent(0.05))
+    static let settingsDivider = adaptiveColor(light: NSColor.black.withAlphaComponent(0.07), dark: NSColor.white.withAlphaComponent(0.14))
+    static let overlaySoft = adaptiveColor(light: NSColor.black.withAlphaComponent(0.06), dark: NSColor.black.withAlphaComponent(0.18))
+    static let overlayMedium = adaptiveColor(light: NSColor.black.withAlphaComponent(0.08), dark: NSColor.black.withAlphaComponent(0.22))
+    static let overlayStrong = adaptiveColor(light: NSColor.black.withAlphaComponent(0.12), dark: NSColor.black.withAlphaComponent(0.28))
+    static let transportFill = adaptiveColor(light: NSColor.black.withAlphaComponent(0.12), dark: NSColor.black.withAlphaComponent(0.32))
+    static let artworkPlaceholder = adaptiveColor(light: NSColor.black.withAlphaComponent(0.08), dark: NSColor.white.withAlphaComponent(0.12))
+    static let onAccent = Color.black
+
+    private static func adaptiveColor(light: NSColor, dark: NSColor) -> Color {
+        Color(nsColor: NSColor(name: nil) { appearance in
+            appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? dark : light
+        })
+    }
 }
 
 enum AppCornerRadius {

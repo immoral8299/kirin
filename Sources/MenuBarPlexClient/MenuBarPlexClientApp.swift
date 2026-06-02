@@ -45,10 +45,13 @@ final class StatusItemController {
     private let iconView = NSImageView(frame: .zero)
     private let marqueeView = StatusMarqueeView(frame: .zero)
     private let stackView = NSStackView(frame: .zero)
-    private let panelContainerView = NSView(frame: .zero)
+    private let panelContainerView: NSView
+    private let panelContentView = NSView(frame: .zero)
     private let rootView: NSHostingView<MenuBarRootView>
     private let panel: NSPanel
     private var cancellables = Set<AnyCancellable>()
+    private var globalMouseMonitor: Any?
+    private var isSettingsTabSelected = false
     private let horizontalPadding: CGFloat = 12
     private let iconWidth: CGFloat = 12
     private let iconTextGap: CGFloat = 8
@@ -58,7 +61,8 @@ final class StatusItemController {
     private let panelSize = NSSize(width: 460, height: 520)
 
     init(appState: AppState) {
-        rootView = NSHostingView(rootView: MenuBarRootView(appState: appState, onClose: {}))
+        panelContainerView = Self.makePanelContainerView()
+        rootView = NSHostingView(rootView: MenuBarRootView(appState: appState, onClose: {}, onTabChange: { _ in }))
         panel = NSPanel(
             contentRect: NSRect(origin: .zero, size: panelSize),
             styleMask: [.borderless, .nonactivatingPanel],
@@ -68,6 +72,8 @@ final class StatusItemController {
         configurePanel()
         rootView.rootView = makeRootView(appState: appState)
         configureButton()
+        configureOutsideClickMonitoring()
+        applyThemePreference(appState.themePreference)
         applyFallbackStatus()
         bind(appState: appState)
         updateStatus(iconName: appState.statusIconName, text: appState.statusLine)
@@ -85,18 +91,45 @@ final class StatusItemController {
         panelContainerView.wantsLayer = true
         panelContainerView.layer?.cornerRadius = AppCornerRadius.panel
         panelContainerView.layer?.masksToBounds = true
-        panelContainerView.layer?.backgroundColor = AppTheme.panelBackground.cgColor
+
+        panelContentView.translatesAutoresizingMaskIntoConstraints = false
+        if #available(macOS 26.0, *), let glassView = panelContainerView as? NSGlassEffectView {
+            glassView.contentView = panelContentView
+        } else {
+            panelContainerView.addSubview(panelContentView)
+            NSLayoutConstraint.activate([
+                panelContentView.leadingAnchor.constraint(equalTo: panelContainerView.leadingAnchor),
+                panelContentView.trailingAnchor.constraint(equalTo: panelContainerView.trailingAnchor),
+                panelContentView.topAnchor.constraint(equalTo: panelContainerView.topAnchor),
+                panelContentView.bottomAnchor.constraint(equalTo: panelContainerView.bottomAnchor),
+            ])
+        }
 
         rootView.translatesAutoresizingMaskIntoConstraints = false
-        panelContainerView.addSubview(rootView)
+        panelContentView.addSubview(rootView)
         NSLayoutConstraint.activate([
-            rootView.leadingAnchor.constraint(equalTo: panelContainerView.leadingAnchor),
-            rootView.trailingAnchor.constraint(equalTo: panelContainerView.trailingAnchor),
-            rootView.topAnchor.constraint(equalTo: panelContainerView.topAnchor),
-            rootView.bottomAnchor.constraint(equalTo: panelContainerView.bottomAnchor),
+            rootView.leadingAnchor.constraint(equalTo: panelContentView.leadingAnchor),
+            rootView.trailingAnchor.constraint(equalTo: panelContentView.trailingAnchor),
+            rootView.topAnchor.constraint(equalTo: panelContentView.topAnchor),
+            rootView.bottomAnchor.constraint(equalTo: panelContentView.bottomAnchor),
         ])
 
         panel.contentView = panelContainerView
+    }
+
+    private static func makePanelContainerView() -> NSView {
+        if #available(macOS 26.0, *) {
+            let glassView = NSGlassEffectView(frame: .zero)
+            glassView.cornerRadius = AppCornerRadius.panel
+            glassView.style = .regular
+            return glassView
+        }
+
+        let effectView = NSVisualEffectView(frame: .zero)
+        effectView.material = .popover
+        effectView.blendingMode = .behindWindow
+        effectView.state = .active
+        return effectView
     }
 
     private func configureButton() {
@@ -140,11 +173,28 @@ final class StatusItemController {
         ])
     }
 
+    private func configureOutsideClickMonitoring() {
+        globalMouseMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
+            Task { @MainActor in
+                self?.hidePanelIfUnpinned()
+            }
+        }
+    }
+
+    private func hidePanelIfUnpinned() {
+        guard panel.isVisible, !isSettingsTabSelected else { return }
+        panel.orderOut(nil)
+    }
+
     private func bind(appState: AppState) {
         appState.objectWillChange
             .sink { [weak self, weak appState] _ in
                 guard let self, let appState else { return }
                 Task { @MainActor in
+                    if !appState.isAuthenticated {
+                        self.isSettingsTabSelected = false
+                    }
+                    self.applyThemePreference(appState.themePreference)
                     self.rootView.rootView = self.makeRootView(appState: appState)
                     self.updateStatus(iconName: appState.statusIconName, text: appState.statusLine)
                 }
@@ -162,9 +212,31 @@ final class StatusItemController {
     }
 
     private func makeRootView(appState: AppState) -> MenuBarRootView {
-        MenuBarRootView(appState: appState) { [weak self] in
-            self?.panel.orderOut(nil)
+        MenuBarRootView(
+            appState: appState,
+            onClose: { [weak self] in
+                self?.panel.orderOut(nil)
+            },
+            onTabChange: { [weak self] isSettingsTabSelected in
+                self?.isSettingsTabSelected = isSettingsTabSelected
+            }
+        )
+    }
+
+    private func applyThemePreference(_ preference: AppThemePreference) {
+        let appearance: NSAppearance?
+        switch preference {
+        case .system:
+            appearance = nil
+        case .light:
+            appearance = NSAppearance(named: .aqua)
+        case .dark:
+            appearance = NSAppearance(named: .darkAqua)
         }
+
+        panel.appearance = appearance
+        panelContainerView.appearance = appearance
+        rootView.appearance = appearance
     }
 
     private func updateStatus(iconName: String, text: String) {

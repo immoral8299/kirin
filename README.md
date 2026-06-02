@@ -24,6 +24,9 @@ PlexTray is a macOS 14+ menu bar music client for Plex with a live in-menu UI.
 - Server and music-library discovery after auth, with persisted selection.
 - Home content fetched from Plex APIs with a first-page cap of 12 items per section; UI carousel handles pagination.
 - Plex music stations discovered from library hubs and played through server-managed audio queues.
+- Home, play-queue, and settings tabs with shared media playback controls.
+- Persisted System, Light, and Dark appearance settings with native Liquid Glass on macOS 26 and a semantic popover-material fallback on older supported macOS versions.
+- Server-managed play-queue editing with Play Next, Add to Queue, reorder, remove, clear-upcoming, refresh, and shuffle controls.
 - Login-first prompt UI appears when not authenticated, with external-browser Plex PIN flow.
 - Basic AVPlayer-backed queue playback from library tracks with next/previous/play/pause controls.
 - Plex timeline progress reporting with a configurable percentage for counting a track as listened.
@@ -56,5 +59,5 @@ Optional environment variables:
 
 1. Replace mock content with real Plex API calls after auth.
 2. Add image caching + robust request/error handling.
-3. Improve queue behavior (shuffle/repeat, smarter previous behavior, track-end auto advance).
+3. Improve queue behavior (repeat and smarter previous behavior).
 4. Add richer now playing metadata sync from active stream events.

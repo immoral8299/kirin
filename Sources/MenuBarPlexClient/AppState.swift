@@ -19,6 +19,9 @@ final class AppState: ObservableObject {
     @Published var availableServers: [PlexServer] = []
     @Published var availableLibraries: [PlexMusicLibrary] = []
     @Published var currentLoadingMessage: String?
+    @Published private(set) var visiblePlayQueue: [PlexTrack] = []
+    @Published private(set) var relatedAlbums: [PlexAlbum] = []
+    @Published private(set) var isQueueOperationInProgress = false
     @Published private(set) var shouldPresentInitialLoadFailure = false
 
     let settingsStore = SettingsStore()
@@ -29,7 +32,6 @@ final class AppState: ObservableObject {
     private var cancellables = Set<AnyCancellable>()
 
     private enum PlaybackSource {
-        case library
         case album(PlexAlbum, PlexMusicLibrary)
         case playlist(PlexPlaylist)
         case station(PlexStation)
@@ -44,7 +46,6 @@ final class AppState: ObservableObject {
     private var timeObserverToken: Any?
     private var playerItemEndObserver: AnyCancellable?
     private var playerTimeControlStatusObserver: AnyCancellable?
-    private var preferredQueueTrackID: String?
     private var playbackPreparationID: Int = 0
     private var seekID: Int = 0
     private var isPlaybackRequested = false
@@ -55,6 +56,8 @@ final class AppState: ObservableObject {
     private var hasMarkedTrackedTrackListened = false
     private var lastTimelineReportDate: Date?
     private var timelineReportTask: Task<Void, Never>?
+    private var relatedAlbumsTask: Task<Void, Never>?
+    private var relatedAlbumsRatingKey: String?
     private let timelineReportInterval: TimeInterval = 10
 
     private struct ServerPlayQueueContext {
@@ -76,6 +79,11 @@ final class AppState: ObservableObject {
         if !shouldPreserveNowPlayingStatus,
            let transientStatusLine {
             return transientStatusLine
+        }
+
+        if nowPlaying == .placeholder,
+           let loadingTargetDescription {
+            return loadingTargetDescription
         }
 
         return settingsStore.settings.menuBarFormat.render(with: nowPlaying)
@@ -126,7 +134,8 @@ final class AppState: ObservableObject {
     }
 
     private var shouldPreserveNowPlayingStatus: Bool {
-        playbackState == .playing && nowPlaying != .placeholder
+        nowPlaying != .placeholder &&
+            (playbackState == .playing || (playbackState == .buffering && isPlaybackRequested))
     }
 
     var isAuthenticated: Bool {
@@ -148,6 +157,10 @@ final class AppState: ObservableObject {
 
     var listenedThresholdPercentage: Int {
         settingsStore.settings.listenedThresholdPercentage
+    }
+
+    var themePreference: AppThemePreference {
+        settingsStore.settings.themePreference
     }
 
     var selectedServerID: String? {
@@ -191,6 +204,14 @@ final class AppState: ObservableObject {
         return min(max(playbackPosition / playbackDuration, 0), 1)
     }
 
+    var hasEditablePlayQueue: Bool {
+        activeServerPlayQueue != nil
+    }
+
+    var currentPlayQueueTrackID: String? {
+        currentTrack?.id
+    }
+
     func togglePlayback() {
         guard let player else { return }
 
@@ -214,6 +235,7 @@ final class AppState: ObservableObject {
         currentQueueIndex = nextIndex
         Task {
             await playCurrentTrack()
+            await refreshServerQueueAfterPlaybackAdvance()
         }
     }
 
@@ -225,6 +247,7 @@ final class AppState: ObservableObject {
         currentQueueIndex = previousIndex
         Task {
             await playCurrentTrack()
+            await refreshServerQueueAfterPlaybackAdvance()
         }
     }
 
@@ -310,8 +333,12 @@ final class AppState: ObservableObject {
     }
 
     func setListenedThresholdPercentage(_ percentage: Int) {
-        settingsStore.settings.listenedThresholdPercentage = min(max(percentage, 5), 100)
+        settingsStore.settings.listenedThresholdPercentage = min(max(percentage, 50), 100)
         markTrackedTrackListenedIfNeeded()
+    }
+
+    func setThemePreference(_ preference: AppThemePreference) {
+        settingsStore.settings.themePreference = preference
     }
 
     func beginPlexLogin() {
@@ -339,6 +366,12 @@ final class AppState: ObservableObject {
         activePlaybackSource = nil
         currentQueueIndex = 0
         activeServerPlayQueue = nil
+        visiblePlayQueue = []
+        relatedAlbums = []
+        relatedAlbumsTask?.cancel()
+        relatedAlbumsTask = nil
+        relatedAlbumsRatingKey = nil
+        isQueueOperationInProgress = false
         nowPlaying = .placeholder
         libraryLoadError = nil
         currentLoadingMessage = nil
@@ -409,10 +442,6 @@ final class AppState: ObservableObject {
             }
 
             let tracks = try await self.apiClient.fetchAlbumTracks(server: server, album: album, userToken: userToken)
-            guard self.isShuffleEnabled, tracks.count >= 20 else {
-                return tracks
-            }
-
             guard let startingTrackRatingKey = tracks.first?.ratingKey else {
                 return tracks
             }
@@ -443,15 +472,10 @@ final class AppState: ObservableObject {
                 album: album,
                 startingTrackRatingKey: startingTrackRatingKey,
                 userToken: userToken,
-                shuffle: true
+                shuffle: isShuffleEnabled
             )
 
-            activeServerPlayQueue = ServerPlayQueueContext(id: snapshot.id, itemCount: max(snapshot.totalCount, snapshot.tracks.count))
-            replacePlaybackQueue(
-                with: snapshot.tracks,
-                keepingTrackID: snapshot.selectedTrackID ?? snapshot.tracks.first?.id,
-                usesServerOrder: true
-            )
+            adoptServerPlayQueue(snapshot, keepingTrackID: snapshot.selectedTrackID ?? snapshot.tracks.first?.id)
             logDebug("Loaded \(snapshot.tracks.count) track(s) from Plex album play queue")
             await playCurrentTrack()
             logDebug("Now playing \(nowPlaying.trackName)")
@@ -501,6 +525,188 @@ final class AppState: ObservableObject {
                     userToken: userToken
                 )
             }
+        }
+    }
+
+    func enqueueAlbum(_ album: PlexAlbum, playNext: Bool) {
+        guard let library = selectedLibrary else { return }
+        enqueue(fallback: { self.playAlbum(album) }) { server, playQueue, userToken in
+            try await self.apiClient.addAlbumToPlayQueue(
+                server: server,
+                library: library,
+                album: album,
+                playQueueID: playQueue.id,
+                playNext: playNext,
+                userToken: userToken
+            )
+        }
+    }
+
+    func enqueuePlaylist(_ playlist: PlexPlaylist, playNext: Bool) {
+        enqueue(fallback: { self.playPlaylist(playlist) }) { server, playQueue, userToken in
+            try await self.apiClient.addPlaylistToPlayQueue(
+                server: server,
+                playlist: playlist,
+                playQueueID: playQueue.id,
+                playNext: playNext,
+                userToken: userToken
+            )
+        }
+    }
+
+    func enqueueStation(_ station: PlexStation, playNext: Bool) {
+        enqueue(fallback: { self.playStation(station) }) { server, playQueue, userToken in
+            try await self.apiClient.addStationToPlayQueue(
+                server: server,
+                station: station,
+                playQueueID: playQueue.id,
+                playNext: playNext,
+                userToken: userToken
+            )
+        }
+    }
+
+    func refreshPlayQueue() {
+        guard let playQueue = activeServerPlayQueue else { return }
+        performQueueOperation {
+            guard let server = self.selectedServer,
+                  let userToken = self.authService.authToken else {
+                throw PlexAPIError.noReachableServer
+            }
+
+            return try await self.apiClient.refreshPlayQueue(
+                server: server,
+                playQueueID: playQueue.id,
+                itemCount: playQueue.itemCount,
+                centeredOn: self.currentTrack?.playQueueItemID,
+                userToken: userToken
+            )
+        }
+    }
+
+    func selectPlayQueueTrack(id: String) {
+        guard let index = playbackQueue.firstIndex(where: { $0.id == id }),
+              index != currentQueueIndex else {
+            return
+        }
+
+        currentQueueIndex = index
+        Task {
+            await playCurrentTrack()
+            await refreshServerQueueAfterPlaybackAdvance()
+        }
+    }
+
+    func removePlayQueueTrack(id: String) {
+        guard id != currentTrack?.id,
+              let playQueueItemID = playbackQueue.first(where: { $0.id == id })?.playQueueItemID else {
+            return
+        }
+
+        performQueueOperation {
+            guard let playQueue = self.activeServerPlayQueue,
+                  let server = self.selectedServer,
+                  let userToken = self.authService.authToken else {
+                throw PlexAPIError.noReachableServer
+            }
+
+            return try await self.apiClient.removePlayQueueItem(
+                server: server,
+                playQueueID: playQueue.id,
+                playQueueItemID: playQueueItemID,
+                itemCount: playQueue.itemCount,
+                userToken: userToken
+            )
+        }
+    }
+
+    func movePlayQueueTrack(id: String, before targetID: String) {
+        guard id != targetID,
+              let playQueue = activeServerPlayQueue,
+              let source = playbackQueue.first(where: { $0.id == id }),
+              let sourceItemID = source.playQueueItemID,
+              let currentIndex = playbackQueue.firstIndex(where: { $0.id == currentTrack?.id }),
+              let sourceIndex = playbackQueue.firstIndex(where: { $0.id == id }),
+              let targetIndex = playbackQueue.firstIndex(where: { $0.id == targetID }) else {
+            return
+        }
+        guard sourceIndex > currentIndex, targetIndex > currentIndex else { return }
+
+        let precedingTracks = playbackQueue[..<targetIndex].filter { $0.id != id }
+        let afterItemID = precedingTracks.last?.playQueueItemID
+
+        performQueueOperation {
+            guard let server = self.selectedServer,
+                  let userToken = self.authService.authToken else {
+                throw PlexAPIError.noReachableServer
+            }
+
+            return try await self.apiClient.movePlayQueueItem(
+                server: server,
+                playQueueID: playQueue.id,
+                playQueueItemID: sourceItemID,
+                afterPlayQueueItemID: afterItemID,
+                itemCount: playQueue.itemCount,
+                userToken: userToken
+            )
+        }
+    }
+
+    func clearUpcomingPlayQueueTracks() {
+        guard let currentTrack,
+              let currentIndex = playbackQueue.firstIndex(where: { $0.id == currentTrack.id }),
+              let server = selectedServer,
+              let userToken = authService.authToken,
+              let playQueue = activeServerPlayQueue else {
+            return
+        }
+
+        guard currentIndex < playbackQueue.count - 1 else { return }
+        guard !isQueueOperationInProgress else { return }
+
+        let previousOrderedPlaybackQueue = orderedPlaybackQueue
+        let previousPlaybackQueue = playbackQueue
+        let previousVisiblePlayQueue = visiblePlayQueue
+        let previousUsesServerManagedQueueOrder = usesServerManagedQueueOrder
+        let previousCurrentQueueIndex = currentQueueIndex
+        let previousActiveServerPlayQueue = activeServerPlayQueue
+        let previousIsShuffleEnabled = isShuffleEnabled
+        let retainedTracks = Array(playbackQueue.prefix(currentIndex + 1))
+        let retainedVisibleTracks: [PlexTrack]
+        if let visibleCurrentIndex = visiblePlayQueue.firstIndex(where: { $0.id == currentTrack.id }) {
+            retainedVisibleTracks = Array(visiblePlayQueue.prefix(visibleCurrentIndex + 1))
+        } else {
+            retainedVisibleTracks = [currentTrack]
+        }
+
+        orderedPlaybackQueue = retainedTracks
+        playbackQueue = retainedTracks
+        visiblePlayQueue = retainedVisibleTracks
+        usesServerManagedQueueOrder = false
+        currentQueueIndex = retainedTracks.count - 1
+        activeServerPlayQueue = nil
+        isShuffleEnabled = false
+        isQueueOperationInProgress = true
+        Task {
+            do {
+                try await self.apiClient.clearPlayQueue(
+                    server: server,
+                    playQueueID: playQueue.id,
+                    userToken: userToken
+                )
+                self.logDebug("Cleared server play queue")
+            } catch {
+                self.orderedPlaybackQueue = previousOrderedPlaybackQueue
+                self.playbackQueue = previousPlaybackQueue
+                self.visiblePlayQueue = previousVisiblePlayQueue
+                self.usesServerManagedQueueOrder = previousUsesServerManagedQueueOrder
+                self.currentQueueIndex = previousCurrentQueueIndex
+                self.activeServerPlayQueue = previousActiveServerPlayQueue
+                self.isShuffleEnabled = previousIsShuffleEnabled
+                self.libraryLoadError = error.localizedDescription
+                self.logDebug("Clear upcoming failed: \(error.localizedDescription)")
+            }
+            self.isQueueOperationInProgress = false
         }
     }
 
@@ -669,9 +875,7 @@ final class AppState: ObservableObject {
         }
 
         logDebug("Fetching last played track")
-        try await prepareLastPlayedTrack(server: server, library: library, userToken: userToken)
-        logDebug("Fetching playback queue")
-        try await reloadPlaybackQueue(server: server, library: library, userToken: userToken)
+        await prepareLastPlayedTrack(server: server, library: library, userToken: userToken)
     }
 
     private func reloadHomeContent(server: PlexServer, library: PlexMusicLibrary, userToken: String) async throws {
@@ -689,37 +893,46 @@ final class AppState: ObservableObject {
         logDebug("Loaded \(recentlyPlayedAlbums.count) recent played, \(recentlyAddedAlbums.count) recent added, \(playlists.count) playlists, \(stations.count) stations")
     }
 
-    private func reloadPlaybackQueue(server: PlexServer, library: PlexMusicLibrary, userToken: String) async throws {
-        let queue = try await apiClient.fetchPlaybackQueue(server: server, library: library, userToken: userToken)
-        logDebug("Loaded playback queue with \(queue.count) track(s)")
+    private func prepareLastPlayedTrack(server: PlexServer, library: PlexMusicLibrary, userToken: String) async {
+        resetPlaybackPreview()
 
-        activePlaybackSource = .library
-        activeServerPlayQueue = nil
-        replacePlaybackQueue(with: queue, keepingTrackID: preferredQueueTrackID)
-        preferredQueueTrackID = nil
+        do {
+            guard let lastPlayedTrack = try await apiClient.fetchLastPlayedTrack(server: server, library: library, userToken: userToken) else {
+                logDebug("No last played track found")
+                return
+            }
 
-        if let currentTrack {
-            updateNowPlaying(from: currentTrack)
-            await preparePlayer(for: currentTrack)
+            updateNowPlaying(from: lastPlayedTrack)
+            await preparePlayer(for: lastPlayedTrack)
             isPlaybackRequested = false
             playbackState = .paused
-            logDebug("Prepared queue at track: \(currentTrack.title)")
+
+            logDebug("Prepared last played track: \(lastPlayedTrack.title)")
+        } catch {
+            logDebug("Last played track lookup failed: \(error.localizedDescription)")
         }
     }
 
-    private func prepareLastPlayedTrack(server: PlexServer, library: PlexMusicLibrary, userToken: String) async throws {
-        guard let lastPlayedTrack = try await apiClient.fetchLastPlayedTrack(server: server, library: library, userToken: userToken) else {
-            logDebug("No last played track found")
-            return
-        }
-
-        updateNowPlaying(from: lastPlayedTrack)
-        await preparePlayer(for: lastPlayedTrack)
+    private func resetPlaybackPreview() {
+        stopTrackingCurrentTrack()
+        orderedPlaybackQueue = []
+        playbackQueue = []
+        visiblePlayQueue = []
+        relatedAlbums = []
+        relatedAlbumsTask?.cancel()
+        relatedAlbumsTask = nil
+        relatedAlbumsRatingKey = nil
+        usesServerManagedQueueOrder = false
+        activePlaybackSource = nil
+        activeServerPlayQueue = nil
+        currentQueueIndex = 0
+        nowPlaying = .placeholder
         isPlaybackRequested = false
-        playbackState = .paused
-        preferredQueueTrackID = lastPlayedTrack.id
-
-        logDebug("Prepared last played track: \(lastPlayedTrack.title)")
+        playbackState = .stopped
+        playbackPosition = 0
+        playbackDuration = 0
+        player?.pause()
+        player?.replaceCurrentItem(with: nil)
     }
 
     private func playCurrentTrack() async {
@@ -762,12 +975,7 @@ final class AppState: ObservableObject {
 
         do {
             let snapshot = try await loader()
-            activeServerPlayQueue = ServerPlayQueueContext(id: snapshot.id, itemCount: max(snapshot.totalCount, snapshot.tracks.count))
-            replacePlaybackQueue(
-                with: snapshot.tracks,
-                keepingTrackID: snapshot.selectedTrackID ?? snapshot.tracks.first?.id,
-                usesServerOrder: true
-            )
+            adoptServerPlayQueue(snapshot, keepingTrackID: snapshot.selectedTrackID ?? snapshot.tracks.first?.id)
             logDebug("Loaded \(snapshot.tracks.count) track(s) from Plex play queue")
             await playCurrentTrack()
             logDebug("Now playing \(nowPlaying.trackName)")
@@ -808,8 +1016,40 @@ final class AppState: ObservableObject {
             trackArtist: track.trackArtist,
             albumArtist: track.albumArtist,
             albumName: track.albumName,
-            artworkURL: track.artworkURL
+            artworkURL: track.artworkURL,
+            trackNumber: track.trackNumber,
+            discNumber: track.discNumber
         )
+        refreshRelatedAlbums(for: track)
+    }
+
+    private func refreshRelatedAlbums(for track: PlexTrack) {
+        guard relatedAlbumsRatingKey != track.albumRatingKey || relatedAlbums.isEmpty else { return }
+
+        relatedAlbumsTask?.cancel()
+        relatedAlbums = []
+        relatedAlbumsRatingKey = track.albumRatingKey
+
+        guard let albumRatingKey = track.albumRatingKey,
+              let server = selectedServer,
+              let userToken = authService.authToken else {
+            return
+        }
+
+        relatedAlbumsTask = Task {
+            do {
+                let albums = try await apiClient.fetchRelatedAlbums(
+                    server: server,
+                    albumRatingKey: albumRatingKey,
+                    userToken: userToken
+                )
+                guard !Task.isCancelled, currentTrack?.id == track.id else { return }
+                relatedAlbums = albums
+            } catch {
+                guard !Task.isCancelled else { return }
+                logDebug("Related albums lookup failed: \(error.localizedDescription)")
+            }
+        }
     }
 
     private var currentTrack: PlexTrack? {
@@ -820,7 +1060,83 @@ final class AppState: ObservableObject {
     private func replacePlaybackQueue(with tracks: [PlexTrack], keepingTrackID: String?, usesServerOrder: Bool = false) {
         orderedPlaybackQueue = tracks
         usesServerManagedQueueOrder = usesServerOrder
+        visiblePlayQueue = usesServerOrder ? tracks : []
         applyPlaybackOrder(keepingTrackID: keepingTrackID)
+    }
+
+    private func adoptServerPlayQueue(_ snapshot: PlexPlayQueueSnapshot, keepingTrackID: String?) {
+        activeServerPlayQueue = ServerPlayQueueContext(id: snapshot.id, itemCount: max(snapshot.totalCount, snapshot.tracks.count))
+        isShuffleEnabled = snapshot.isShuffled
+        replacePlaybackQueue(
+            with: snapshot.tracks,
+            keepingTrackID: keepingTrackID,
+            usesServerOrder: true
+        )
+
+        if let currentTrack {
+            updateNowPlaying(from: currentTrack)
+        }
+    }
+
+    private func enqueue(
+        fallback: @escaping () -> Void,
+        loader: @escaping (PlexServer, ServerPlayQueueContext, String) async throws -> PlexPlayQueueSnapshot
+    ) {
+        guard let playQueue = activeServerPlayQueue else {
+            fallback()
+            return
+        }
+
+        performQueueOperation {
+            guard let server = self.selectedServer,
+                  let userToken = self.authService.authToken else {
+                throw PlexAPIError.noReachableServer
+            }
+
+            return try await loader(server, playQueue, userToken)
+        }
+    }
+
+    private func performQueueOperation(loader: @escaping () async throws -> PlexPlayQueueSnapshot) {
+        guard !isQueueOperationInProgress else { return }
+
+        isQueueOperationInProgress = true
+        let keepingTrackID = currentTrack?.id
+        Task {
+            do {
+                let snapshot = try await loader()
+                self.adoptServerPlayQueue(snapshot, keepingTrackID: keepingTrackID ?? snapshot.selectedTrackID)
+            } catch {
+                self.libraryLoadError = error.localizedDescription
+                self.logDebug("Queue update failed: \(error.localizedDescription)")
+            }
+            self.isQueueOperationInProgress = false
+        }
+    }
+
+    private func refreshServerQueueAfterPlaybackAdvance() async {
+        guard let playQueue = activeServerPlayQueue,
+              let server = selectedServer,
+              let userToken = authService.authToken else {
+            return
+        }
+
+        let keepingTrackID = currentTrack?.id
+        let centerItemID = currentTrack?.playQueueItemID
+        try? await Task.sleep(for: .milliseconds(300))
+
+        do {
+            let snapshot = try await apiClient.refreshPlayQueue(
+                server: server,
+                playQueueID: playQueue.id,
+                itemCount: playQueue.itemCount,
+                centeredOn: centerItemID,
+                userToken: userToken
+            )
+            adoptServerPlayQueue(snapshot, keepingTrackID: keepingTrackID ?? snapshot.selectedTrackID)
+        } catch {
+            logDebug("Queue refresh after track change failed: \(error.localizedDescription)")
+        }
     }
 
     private func applyPlaybackOrder(keepingTrackID: String?) {
@@ -930,6 +1246,7 @@ final class AppState: ObservableObject {
         if currentQueueIndex < playbackQueue.count - 1 {
             currentQueueIndex += 1
             await playCurrentTrack()
+            await refreshServerQueueAfterPlaybackAdvance()
             logDebug("Auto-advanced to \(nowPlaying.trackName)")
             return
         }
@@ -1010,7 +1327,7 @@ final class AppState: ObservableObject {
                     server: server,
                     ratingKey: ratingKey,
                     playQueueID: playQueue?.id,
-                    playQueueItemID: track.id == ratingKey ? nil : track.id,
+                    playQueueItemID: track.playQueueItemID,
                     state: state,
                     positionMilliseconds: positionMilliseconds,
                     durationMilliseconds: durationMilliseconds,
@@ -1094,16 +1411,7 @@ final class AppState: ObservableObject {
                 )
             }()
 
-            activeServerPlayQueue = ServerPlayQueueContext(id: snapshot.id, itemCount: max(snapshot.totalCount, snapshot.tracks.count))
-            replacePlaybackQueue(
-                with: snapshot.tracks,
-                keepingTrackID: snapshot.selectedTrackID ?? keepingTrackID,
-                usesServerOrder: true
-            )
-
-            if let currentTrack {
-                updateNowPlaying(from: currentTrack)
-            }
+            adoptServerPlayQueue(snapshot, keepingTrackID: snapshot.selectedTrackID ?? keepingTrackID)
 
             logDebug(enabled ? "Shuffle enabled" : "Shuffle disabled")
         } catch {
@@ -1131,16 +1439,7 @@ final class AppState: ObservableObject {
                 shuffle: true
             )
 
-            activeServerPlayQueue = ServerPlayQueueContext(id: snapshot.id, itemCount: max(snapshot.totalCount, snapshot.tracks.count))
-            replacePlaybackQueue(
-                with: snapshot.tracks,
-                keepingTrackID: snapshot.selectedTrackID ?? keepingTrackID,
-                usesServerOrder: true
-            )
-
-            if let currentTrack {
-                updateNowPlaying(from: currentTrack)
-            }
+            adoptServerPlayQueue(snapshot, keepingTrackID: snapshot.selectedTrackID ?? keepingTrackID)
 
             logDebug("Shuffle enabled")
         } catch {
@@ -1279,7 +1578,6 @@ final class AppState: ObservableObject {
         let formatter = DateFormatter()
         formatter.dateFormat = "HH:mm:ss"
         let line = "[\(formatter.string(from: Date()))] \(message)"
-        currentLoadingMessage = message
         print(line)
     }
 

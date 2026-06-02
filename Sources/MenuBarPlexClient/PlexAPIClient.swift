@@ -151,25 +151,6 @@ struct PlexAPIClient {
         )
     }
 
-    func fetchPlaybackQueue(server: PlexServer, library: PlexMusicLibrary, userToken: String, limit: Int = 30) async throws -> [PlexTrack] {
-        let token = server.accessToken ?? userToken
-        let query = [
-            URLQueryItem(name: "X-Plex-Container-Start", value: "0"),
-            URLQueryItem(name: "X-Plex-Container-Size", value: String(limit)),
-            URLQueryItem(name: "type", value: "10"),
-        ]
-
-        let allURL = buildURL(base: server.baseURL, path: "library/sections/\(library.id)/all", query: query)
-        let data = try await request(url: allURL, token: token)
-
-        let tracks = try parseTracks(data: data, server: server, token: token)
-        guard !tracks.isEmpty else {
-            throw PlexAPIError.noTracksInLibrary
-        }
-
-        return tracks
-    }
-
     func fetchLastPlayedTrack(server: PlexServer, library: PlexMusicLibrary, userToken: String) async throws -> PlexTrack? {
         let token = server.accessToken ?? userToken
         let query = [
@@ -194,6 +175,22 @@ struct PlexAPIClient {
         }
 
         return tracks
+    }
+
+    func fetchRelatedAlbums(server: PlexServer, albumRatingKey: String, userToken: String, limit: Int = 3) async throws -> [PlexAlbum] {
+        let token = server.accessToken ?? userToken
+        let query = [URLQueryItem(name: "count", value: String(limit))]
+        let url = buildURL(base: server.baseURL, path: "hubs/metadata/\(albumRatingKey)", query: query)
+        let data = try await request(url: url, token: token)
+        let container = try mediaContainer(from: data)
+
+        return deduplicate(nestedObjects(in: container).compactMap { node -> PlexAlbum? in
+            guard node.string(for: ["ratingKey"]) != nil else { return nil }
+            return album(from: node, server: server, token: token)
+        })
+            .filter { $0.id != albumRatingKey }
+            .prefix(limit)
+            .map { $0 }
     }
 
     func fetchPlaylistTracks(server: PlexServer, playlist: PlexPlaylist, userToken: String) async throws -> [PlexTrack] {
@@ -294,6 +291,93 @@ struct PlexAPIClient {
         return try await fetchPlayQueue(server: server, playQueueID: playQueueID, itemCount: totalCount, userToken: userToken)
     }
 
+    func refreshPlayQueue(server: PlexServer, playQueueID: Int, itemCount: Int, centeredOn playQueueItemID: String? = nil, userToken: String) async throws -> PlexPlayQueueSnapshot {
+        try await fetchPlayQueue(server: server, playQueueID: playQueueID, itemCount: itemCount, centeredOn: playQueueItemID, userToken: userToken)
+    }
+
+    func addAlbumToPlayQueue(server: PlexServer, library: PlexMusicLibrary, album: PlexAlbum, playQueueID: Int, playNext: Bool, userToken: String) async throws -> PlexPlayQueueSnapshot {
+        guard let libraryUUID = library.uuid else {
+            throw PlexAPIError.invalidResponse
+        }
+
+        return try await addToPlayQueue(
+            server: server,
+            playQueueID: playQueueID,
+            uri: libraryURI(uuid: libraryUUID, metadataPath: "/library/metadata/\(album.id)"),
+            playlistID: nil,
+            playNext: playNext,
+            userToken: userToken
+        )
+    }
+
+    func addPlaylistToPlayQueue(server: PlexServer, playlist: PlexPlaylist, playQueueID: Int, playNext: Bool, userToken: String) async throws -> PlexPlayQueueSnapshot {
+        try await addToPlayQueue(
+            server: server,
+            playQueueID: playQueueID,
+            uri: nil,
+            playlistID: playlist.id,
+            playNext: playNext,
+            userToken: userToken
+        )
+    }
+
+    func addStationToPlayQueue(server: PlexServer, station: PlexStation, playQueueID: Int, playNext: Bool, userToken: String) async throws -> PlexPlayQueueSnapshot {
+        try await addToPlayQueue(
+            server: server,
+            playQueueID: playQueueID,
+            uri: "server://\(server.id)/com.plexapp.plugins.library\(station.key)",
+            playlistID: nil,
+            playNext: playNext,
+            userToken: userToken
+        )
+    }
+
+    func removePlayQueueItem(server: PlexServer, playQueueID: Int, playQueueItemID: String, itemCount: Int, userToken: String) async throws -> PlexPlayQueueSnapshot {
+        let token = server.accessToken ?? userToken
+        let url = buildURL(base: server.baseURL, path: "playQueues/\(playQueueID)/items/\(playQueueItemID)")
+        let container = try await requestContainer(url: url, token: token, method: "DELETE")
+        let totalCount = max(container.int(for: ["playQueueTotalCount"]) ?? itemCount - 1, 1)
+        return try await fetchPlayQueue(server: server, playQueueID: playQueueID, itemCount: totalCount, userToken: userToken)
+    }
+
+    func clearPlayQueue(server: PlexServer, playQueueID: Int, userToken: String) async throws {
+        let token = server.accessToken ?? userToken
+        let url = buildURL(base: server.baseURL, path: "playQueues/\(playQueueID)/items")
+        _ = try await request(url: url, token: token, method: "DELETE")
+    }
+
+    func movePlayQueueItem(server: PlexServer, playQueueID: Int, playQueueItemID: String, afterPlayQueueItemID: String?, itemCount: Int, userToken: String) async throws -> PlexPlayQueueSnapshot {
+        let token = server.accessToken ?? userToken
+        let query = afterPlayQueueItemID.map { [URLQueryItem(name: "after", value: $0)] } ?? []
+        let url = buildURL(base: server.baseURL, path: "playQueues/\(playQueueID)/items/\(playQueueItemID)/move", query: query)
+        let container = try await requestContainer(url: url, token: token, method: "PUT")
+        let totalCount = max(container.int(for: ["playQueueTotalCount"]) ?? itemCount, 1)
+        return try await fetchPlayQueue(server: server, playQueueID: playQueueID, itemCount: totalCount, userToken: userToken)
+    }
+
+    private func addToPlayQueue(server: PlexServer, playQueueID: Int, uri: String?, playlistID: String?, playNext: Bool, userToken: String) async throws -> PlexPlayQueueSnapshot {
+        let token = server.accessToken ?? userToken
+        var query = [URLQueryItem(name: "next", value: playNext ? "1" : "0")]
+        if let uri {
+            query.append(URLQueryItem(name: "uri", value: uri))
+        }
+        if let playlistID {
+            query.append(URLQueryItem(name: "playlistID", value: playlistID))
+        }
+
+        let url = buildURL(base: server.baseURL, path: "playQueues/\(playQueueID)", query: query)
+        let container = try await requestContainer(url: url, token: token, method: "PUT")
+        let totalCount = max(container.int(for: ["playQueueTotalCount"]) ?? 1, 1)
+        return try await fetchPlayQueue(server: server, playQueueID: playQueueID, itemCount: totalCount, userToken: userToken)
+    }
+
+    private func libraryURI(uuid: String, metadataPath: String) -> String {
+        var allowedCharacters = CharacterSet.urlPathAllowed
+        allowedCharacters.remove(charactersIn: "/")
+        let encodedPath = metadataPath.addingPercentEncoding(withAllowedCharacters: allowedCharacters) ?? metadataPath
+        return "library://\(uuid)/item/\(encodedPath)"
+    }
+
     func fetchLoudnessGain(server: PlexServer, ratingKey: String, userToken: String) async throws -> Float? {
         let token = server.accessToken ?? userToken
         let url = buildURL(base: server.baseURL, path: "library/metadata/\(ratingKey)")
@@ -359,29 +443,27 @@ struct PlexAPIClient {
         let container = try mediaContainer(from: data)
         let metadataNodes = container.objectArray(for: ["Metadata", "metadata"])
 
-        let albums = metadataNodes.compactMap { node -> PlexAlbum? in
-            let type = node.string(for: ["type"])?.lowercased()
-            if let type, type != "album" {
-                return nil
-            }
-
-            guard let id = node.string(for: ["ratingKey", "key", "id"]) else {
-                return nil
-            }
-
-            let title = node.string(for: ["title"]) ?? "Unknown Album"
-            let artist = node.string(for: ["parentTitle", "grandparentTitle", "originalTitle"]) ?? "Unknown Artist"
-            let artworkPath = node.string(for: ["thumb", "parentThumb", "grandparentThumb", "art"])
-
-            return PlexAlbum(
-                id: id,
-                title: title,
-                artist: artist,
-                artworkURL: artworkURL(from: artworkPath, server: server, token: token)
-            )
-        }
+        let albums = metadataNodes.compactMap { album(from: $0, server: server, token: token) }
 
         return deduplicate(albums)
+    }
+
+    private func album(from node: [String: Any], server: PlexServer, token: String?) -> PlexAlbum? {
+        guard node.string(for: ["type"])?.lowercased() == "album",
+              let id = node.string(for: ["ratingKey", "key", "id"]) else {
+            return nil
+        }
+
+        let title = node.string(for: ["title"]) ?? "Unknown Album"
+        let artist = node.string(for: ["parentTitle", "grandparentTitle", "originalTitle"]) ?? "Unknown Artist"
+        let artworkPath = node.string(for: ["thumb", "parentThumb", "grandparentThumb", "art"])
+
+        return PlexAlbum(
+            id: id,
+            title: title,
+            artist: artist,
+            artworkURL: artworkURL(from: artworkPath, server: server, token: token)
+        )
     }
 
     private func parsePlaylists(data: Data) throws -> [PlexPlaylist] {
@@ -412,7 +494,8 @@ struct PlexAPIClient {
         let stations = nestedObjects(in: container).compactMap { node -> PlexStation? in
             guard let key = node.string(for: ["key"]),
                   key.contains("/station/") || node.string(for: ["radio"]) == "1",
-                  let title = node.string(for: ["title"]) else {
+                  let title = node.string(for: ["title"]),
+                  !["style radio", "mood radio"].contains(title.lowercased()) else {
                 return nil
             }
 
@@ -457,13 +540,17 @@ struct PlexAPIClient {
 
             return PlexTrack(
                 id: id,
+                playQueueItemID: nil,
                 ratingKey: node.string(for: ["ratingKey", "key", "id"]),
+                albumRatingKey: node.string(for: ["parentRatingKey"]),
                 durationMilliseconds: node.int(for: ["duration"]),
                 title: node.string(for: ["title"]) ?? "Unknown Track",
                 trackArtist: node.string(for: ["originalTitle", "grandparentTitle"]),
                 albumArtist: node.string(for: ["grandparentTitle", "parentTitle"]),
                 albumName: node.string(for: ["parentTitle"]) ?? "Unknown Album",
                 artworkURL: artworkURL(from: artworkPath, server: server, token: token),
+                trackNumber: node.int(for: ["index"]),
+                discNumber: node.int(for: ["parentIndex"]),
                 streamURL: streamURL
             )
         }
@@ -471,13 +558,16 @@ struct PlexAPIClient {
         return deduplicate(tracks)
     }
 
-    private func fetchPlayQueue(server: PlexServer, playQueueID: Int, itemCount: Int, userToken: String) async throws -> PlexPlayQueueSnapshot {
+    private func fetchPlayQueue(server: PlexServer, playQueueID: Int, itemCount: Int, centeredOn playQueueItemID: String? = nil, userToken: String) async throws -> PlexPlayQueueSnapshot {
         let token = server.accessToken ?? userToken
-        let query = [
+        var query = [
             URLQueryItem(name: "window", value: String(max(itemCount, 1))),
             URLQueryItem(name: "includeBefore", value: "1"),
             URLQueryItem(name: "includeAfter", value: "1"),
         ]
+        if let playQueueItemID {
+            query.append(URLQueryItem(name: "center", value: playQueueItemID))
+        }
 
         let url = buildURL(base: server.baseURL, path: "playQueues/\(playQueueID)", query: query)
         let container = try await requestContainer(url: url, token: token)
@@ -490,6 +580,8 @@ struct PlexAPIClient {
             id: playQueueID,
             totalCount: max(container.int(for: ["playQueueTotalCount"]) ?? itemCount, tracks.count),
             selectedTrackID: container.string(for: ["playQueueSelectedItemID"]),
+            version: container.int(for: ["playQueueVersion"]),
+            isShuffled: container.string(for: ["playQueueShuffled"]) == "1",
             tracks: tracks
         )
     }
@@ -516,13 +608,17 @@ struct PlexAPIClient {
 
             return PlexTrack(
                 id: id,
+                playQueueItemID: nil,
                 ratingKey: node.string(for: ["ratingKey", "key", "id"]),
+                albumRatingKey: node.string(for: ["parentRatingKey"]),
                 durationMilliseconds: node.int(for: ["duration"]),
                 title: node.string(for: ["title"]) ?? "Unknown Track",
                 trackArtist: node.string(for: ["originalTitle", "grandparentTitle"]),
                 albumArtist: node.string(for: ["grandparentTitle", "parentTitle"]),
                 albumName: node.string(for: ["parentTitle"]) ?? "Unknown Album",
                 artworkURL: artworkURL(from: artworkPath, server: server, token: token),
+                trackNumber: node.int(for: ["index"]),
+                discNumber: node.int(for: ["parentIndex"]),
                 streamURL: streamURL
             )
         }
@@ -552,13 +648,17 @@ struct PlexAPIClient {
 
             return PlexTrack(
                 id: id,
+                playQueueItemID: node.string(for: ["playQueueItemID"]),
                 ratingKey: node.string(for: ["ratingKey", "key", "id"]),
+                albumRatingKey: node.string(for: ["parentRatingKey"]),
                 durationMilliseconds: node.int(for: ["duration"]),
                 title: node.string(for: ["title"]) ?? "Unknown Track",
                 trackArtist: node.string(for: ["originalTitle", "grandparentTitle"]),
                 albumArtist: node.string(for: ["grandparentTitle", "parentTitle"]),
                 albumName: node.string(for: ["parentTitle"]) ?? "Unknown Album",
                 artworkURL: artworkURL(from: artworkPath, server: server, token: token),
+                trackNumber: node.int(for: ["index"]),
+                discNumber: node.int(for: ["parentIndex"]),
                 streamURL: streamURL
             )
         }

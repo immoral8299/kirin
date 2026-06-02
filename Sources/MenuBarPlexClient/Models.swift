@@ -37,6 +37,8 @@ struct TrackMetadata: Codable, Equatable {
     var albumArtist: String?
     var albumName: String
     var artworkURL: URL?
+    var trackNumber: Int?
+    var discNumber: Int?
 
     var resolvedTrackArtist: String {
         let trimmedTrackArtist = trackArtist?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -53,11 +55,13 @@ struct TrackMetadata: Codable, Equatable {
     }
 
     static let placeholder = TrackMetadata(
-        trackName: "Not Playing",
+        trackName: "Unknown Track",
         trackArtist: nil,
         albumArtist: nil,
-        albumName: "",
-        artworkURL: nil
+        albumName: "Unknown Album",
+        artworkURL: nil,
+        trackNumber: nil,
+        discNumber: nil
     )
 }
 
@@ -82,13 +86,17 @@ struct PlexStation: Identifiable, Hashable {
 
 struct PlexTrack: Identifiable, Hashable {
     let id: String
+    let playQueueItemID: String?
     let ratingKey: String?
+    let albumRatingKey: String?
     let durationMilliseconds: Int?
     let title: String
     let trackArtist: String?
     let albumArtist: String?
     let albumName: String
     let artworkURL: URL?
+    let trackNumber: Int?
+    let discNumber: Int?
     let streamURL: URL
 }
 
@@ -96,6 +104,8 @@ struct PlexPlayQueueSnapshot {
     let id: Int
     let totalCount: Int
     let selectedTrackID: String?
+    let version: Int?
+    let isShuffled: Bool
     let tracks: [PlexTrack]
 }
 
@@ -209,6 +219,25 @@ struct SectionVisibility: Codable, Equatable {
     )
 }
 
+enum AppThemePreference: String, CaseIterable, Codable, Identifiable {
+    case system
+    case light
+    case dark
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .system:
+            return "System"
+        case .light:
+            return "Light"
+        case .dark:
+            return "Dark"
+        }
+    }
+}
+
 struct AppSettings: Codable, Equatable {
     var menuBarFormat: MenuBarFormat
     var sectionVisibility: SectionVisibility
@@ -216,6 +245,7 @@ struct AppSettings: Codable, Equatable {
     var selectedLibraryID: String?
     var loudnessLevelingEnabled: Bool
     var listenedThresholdPercentage: Int
+    var themePreference: AppThemePreference
 
     private enum CodingKeys: String, CodingKey {
         case menuBarFormat
@@ -224,6 +254,7 @@ struct AppSettings: Codable, Equatable {
         case selectedLibraryID
         case loudnessLevelingEnabled
         case listenedThresholdPercentage
+        case themePreference
     }
 
     init(
@@ -232,7 +263,8 @@ struct AppSettings: Codable, Equatable {
         selectedServerID: String?,
         selectedLibraryID: String?,
         loudnessLevelingEnabled: Bool,
-        listenedThresholdPercentage: Int
+        listenedThresholdPercentage: Int,
+        themePreference: AppThemePreference
     ) {
         self.menuBarFormat = menuBarFormat
         self.sectionVisibility = sectionVisibility
@@ -240,6 +272,7 @@ struct AppSettings: Codable, Equatable {
         self.selectedLibraryID = selectedLibraryID
         self.loudnessLevelingEnabled = loudnessLevelingEnabled
         self.listenedThresholdPercentage = listenedThresholdPercentage
+        self.themePreference = themePreference
     }
 
     init(from decoder: Decoder) throws {
@@ -249,7 +282,8 @@ struct AppSettings: Codable, Equatable {
         selectedServerID = try container.decodeIfPresent(String.self, forKey: .selectedServerID)
         selectedLibraryID = try container.decodeIfPresent(String.self, forKey: .selectedLibraryID)
         loudnessLevelingEnabled = try container.decodeIfPresent(Bool.self, forKey: .loudnessLevelingEnabled) ?? false
-        listenedThresholdPercentage = min(max(try container.decodeIfPresent(Int.self, forKey: .listenedThresholdPercentage) ?? 90, 5), 100)
+        listenedThresholdPercentage = min(max(try container.decodeIfPresent(Int.self, forKey: .listenedThresholdPercentage) ?? 90, 50), 100)
+        themePreference = try container.decodeIfPresent(AppThemePreference.self, forKey: .themePreference) ?? .system
     }
 
     static let `default` = AppSettings(
@@ -258,7 +292,8 @@ struct AppSettings: Codable, Equatable {
         selectedServerID: nil,
         selectedLibraryID: nil,
         loudnessLevelingEnabled: false,
-        listenedThresholdPercentage: 90
+        listenedThresholdPercentage: 90,
+        themePreference: .system
     )
 }
 
