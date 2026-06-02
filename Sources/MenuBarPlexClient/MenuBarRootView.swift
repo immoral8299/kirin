@@ -23,7 +23,7 @@ struct MenuBarRootView: View {
         VStack(spacing: 0) {
             topBar
                 .padding(.horizontal, 14)
-                .padding(.top, 12)
+                .padding(.top, 10)
                 .padding(.bottom, 12)
 
             ScrollView {
@@ -31,7 +31,7 @@ struct MenuBarRootView: View {
                     scrollableContent
                 }
                 .padding(.horizontal, 14)
-                .padding(.bottom, 12)
+                .padding(.bottom, 14)
                 .frame(width: MenuBarLayout.contentWidth, alignment: .top)
                 .frame(maxWidth: .infinity, minHeight: MenuBarLayout.minPopupHeight, alignment: .top)
             }
