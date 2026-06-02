@@ -753,7 +753,8 @@ private struct PlaylistCarouselSection: View {
                                                 .font(.system(size: 10, weight: .regular, design: .rounded))
                                                 .foregroundStyle(.secondary.opacity(0.74))
                                         }
-                                        .padding(8)
+                                        .offset(y: -1)
+                                        .padding(12)
                                         .frame(width: 210, alignment: .leading)
                                         .background(AppTheme.panelFill, in: RoundedRectangle(cornerRadius: AppCornerRadius.compact, style: .continuous))
                                     }
@@ -823,14 +824,16 @@ private struct StationCarouselSection: View {
                                     Button {
                                         onSelect(station)
                                     } label: {
-                                        HStack(spacing: 6) {
+                                        HStack(spacing: 8) {
                                             Image(systemName: "radio")
                                                 .foregroundStyle(AppTheme.accent)
                                             Text(station.title)
                                                 .font(.system(size: 12, weight: .semibold, design: .rounded))
                                                 .lineLimit(2)
                                         }
-                                        .padding(8)
+                                        .offset(y: -1)
+                                        .padding(.horizontal, 12)
+                                        .padding(.vertical, 10)
                                         .frame(width: 210, height: 56, alignment: .leading)
                                         .background(AppTheme.panelFill, in: RoundedRectangle(cornerRadius: AppCornerRadius.compact, style: .continuous))
                                     }
