@@ -5,6 +5,8 @@ final class QueueManager: ObservableObject {
     @Published var visiblePlayQueue: [PlexTrack] = []
     @Published var isQueueOperationInProgress = false
     @Published var isShuffleEnabled = false
+    @Published private(set) var pendingPlaybackID: String?
+    @Published private(set) var pendingPlaybackSource: String?
 
     private let context: StoreContext
     private var orderedPlaybackQueue: [PlexTrack] = []
@@ -47,12 +49,22 @@ final class QueueManager: ObservableObject {
     // MARK: - Play
 
     func playAlbum(_ album: PlexAlbum) {
+        playAlbum(album, source: nil)
+    }
+
+    func playAlbum(_ album: PlexAlbum, source: String?) {
+        let pendingID = PendingPlaybackID.album(album.id)
+        pendingPlaybackID = pendingID
+        pendingPlaybackSource = source
         Task {
             await playAlbumSelection(album)
+            clearPendingPlayback(ifMatching: pendingID)
         }
     }
 
     func playPlaylist(_ playlist: PlexPlaylist) {
+        let pendingID = PendingPlaybackID.playlist(playlist.id)
+        pendingPlaybackID = pendingID
         Task {
             activePlaybackSource = .playlist(playlist)
             await playServerQueueSelection(named: playlist.title) {
@@ -68,10 +80,13 @@ final class QueueManager: ObservableObject {
                     shuffle: self.isShuffleEnabled
                 )
             }
+            clearPendingPlayback(ifMatching: pendingID)
         }
     }
 
     func playStation(_ station: PlexStation) {
+        let pendingID = PendingPlaybackID.station(station.id)
+        pendingPlaybackID = pendingID
         Task {
             activePlaybackSource = .station(station)
             await playServerQueueSelection(named: station.title) {
@@ -86,6 +101,7 @@ final class QueueManager: ObservableObject {
                     userToken: userToken
                 )
             }
+            clearPendingPlayback(ifMatching: pendingID)
         }
     }
 
@@ -124,6 +140,74 @@ final class QueueManager: ObservableObject {
                 station: station,
                 playQueueID: playQueue.id,
                 playNext: playNext,
+                userToken: userToken
+            )
+        }
+    }
+
+    func playStationRecommendation(_ recommendation: PlexStationRecommendation) {
+        switch recommendation.kind {
+        case .artist:
+            guard let station = recommendation.station else { return }
+            let pendingID = PendingPlaybackID.recommendation(recommendation.id)
+            pendingPlaybackID = pendingID
+            Task {
+                activePlaybackSource = .station(station)
+                await playServerQueueSelection(named: station.title) {
+                    guard let server = self.context.libraryStore?.selectedServer,
+                          let userToken = self.context.plexService.authService.authToken else {
+                        throw PlexAPIError.noReachableServer
+                    }
+
+                    return try await self.context.plexService.createStationPlayQueue(
+                        server: server,
+                        station: station,
+                        userToken: userToken
+                    )
+                }
+                clearPendingPlayback(ifMatching: pendingID)
+            }
+        case .album:
+            let pendingID = PendingPlaybackID.recommendation(recommendation.id)
+            pendingPlaybackID = pendingID
+            Task {
+                await playAlbumRadioRecommendation(recommendation)
+                clearPendingPlayback(ifMatching: pendingID)
+            }
+        }
+    }
+
+    func enqueueStationRecommendation(_ recommendation: PlexStationRecommendation) {
+        enqueue(fallback: { self.playStationRecommendation(recommendation) }) { server, playQueue, userToken in
+            guard let library = self.context.libraryStore?.selectedLibrary else {
+                throw PlexAPIError.noReachableServer
+            }
+
+            let tracks: [PlexTrack]
+            switch recommendation.kind {
+            case .artist:
+                guard let station = recommendation.station else {
+                    throw PlexAPIError.invalidResponse
+                }
+                tracks = try await self.context.plexService.createStationPlayQueue(
+                    server: server,
+                    station: station,
+                    userToken: userToken
+                ).tracks
+            case .album:
+                tracks = try await self.context.plexService.fetchAlbumRadioTracks(
+                    server: server,
+                    albumRatingKey: recommendation.seedID,
+                    userToken: userToken
+                )
+            }
+
+            return try await self.context.plexService.addTracksToPlayQueue(
+                server: server,
+                library: library,
+                tracks: tracks,
+                playQueueID: playQueue.id,
+                playNext: false,
                 userToken: userToken
             )
         }
@@ -245,6 +329,7 @@ final class QueueManager: ObservableObject {
         orderedPlaybackQueue = retainedTracks
         playbackQueue = retainedTracks
         visiblePlayQueue = retainedVisibleTracks
+        self.context.libraryStore?.refreshQueueStationRecommendations(for: visiblePlayQueue)
         usesServerManagedQueueOrder = false
         currentQueueIndex = retainedTracks.count - 1
         activeServerPlayQueue = nil
@@ -262,6 +347,7 @@ final class QueueManager: ObservableObject {
                 orderedPlaybackQueue = previousOrderedPlaybackQueue
                 playbackQueue = previousPlaybackQueue
                 visiblePlayQueue = previousVisiblePlayQueue
+                self.context.libraryStore?.refreshQueueStationRecommendations(for: visiblePlayQueue)
                 usesServerManagedQueueOrder = previousUsesServerManagedQueueOrder
                 currentQueueIndex = previousCurrentQueueIndex
                 activeServerPlayQueue = previousActiveServerPlayQueue
@@ -363,6 +449,9 @@ final class QueueManager: ObservableObject {
         orderedPlaybackQueue = []
         playbackQueue = []
         visiblePlayQueue = []
+        self.context.libraryStore?.resetQueueStationRecommendations()
+        pendingPlaybackID = nil
+        pendingPlaybackSource = nil
         relatedAlbumsTask?.cancel()
         usesServerManagedQueueOrder = false
         activePlaybackSource = nil
@@ -376,6 +465,34 @@ final class QueueManager: ObservableObject {
 
     private var lastRelatedAlbumsRatingKey: String?
     private var relatedAlbumsTask: Task<Void, Never>?
+
+    private func clearPendingPlayback(ifMatching id: String) {
+        guard pendingPlaybackID == id else { return }
+        pendingPlaybackID = nil
+        pendingPlaybackSource = nil
+    }
+
+    private func playAlbumRadioRecommendation(_ recommendation: PlexStationRecommendation) async {
+        await playServerQueueSelection(named: recommendation.title) {
+            guard let server = self.context.libraryStore?.selectedServer,
+                  let library = self.context.libraryStore?.selectedLibrary,
+                  let userToken = self.context.plexService.authService.authToken else {
+                throw PlexAPIError.noReachableServer
+            }
+
+            let tracks = try await self.context.plexService.fetchAlbumRadioTracks(
+                server: server,
+                albumRatingKey: recommendation.seedID,
+                userToken: userToken
+            )
+            return try await self.context.plexService.createTrackListPlayQueue(
+                server: server,
+                library: library,
+                tracks: tracks,
+                userToken: userToken
+            )
+        }
+    }
 
     private func playAlbumSelection(_ album: PlexAlbum) async {
         guard let library = self.context.libraryStore?.selectedLibrary else { return }
@@ -495,6 +612,7 @@ final class QueueManager: ObservableObject {
         orderedPlaybackQueue = tracks
         usesServerManagedQueueOrder = usesServerOrder
         visiblePlayQueue = usesServerOrder ? tracks : []
+        self.context.libraryStore?.refreshQueueStationRecommendations(for: visiblePlayQueue)
         applyPlaybackOrder(keepingTrackID: keepingTrackID)
     }
 

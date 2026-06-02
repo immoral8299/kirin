@@ -84,11 +84,37 @@ struct PlexStation: Identifiable, Hashable {
     let key: String
 }
 
+enum PlexStationRecommendationKind: Hashable {
+    case artist
+    case album
+}
+
+struct PlexStationRecommendation: Identifiable, Hashable {
+    let kind: PlexStationRecommendationKind
+    let seedID: String
+    let title: String
+    let subtitle: String
+    let artworkURL: URL?
+    let station: PlexStation?
+
+    var id: String {
+        "\(kind)-\(seedID)"
+    }
+}
+
+enum PendingPlaybackID {
+    static func album(_ id: String) -> String { "album-\(id)" }
+    static func playlist(_ id: String) -> String { "playlist-\(id)" }
+    static func station(_ id: String) -> String { "station-\(id)" }
+    static func recommendation(_ id: String) -> String { "recommendation-\(id)" }
+}
+
 struct PlexTrack: Identifiable, Hashable {
     let id: String
     let playQueueItemID: String?
     let ratingKey: String?
     let albumRatingKey: String?
+    let artistRatingKey: String?
     let durationMilliseconds: Int?
     let title: String
     let trackArtist: String?

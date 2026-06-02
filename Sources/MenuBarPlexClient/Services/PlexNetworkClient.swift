@@ -22,6 +22,9 @@ struct PlexNetworkClient {
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse,
               200 ..< 300 ~= http.statusCode else {
+            let statusCode = (response as? HTTPURLResponse)?.statusCode.description ?? "non-HTTP"
+            let responseBody = String(data: data.prefix(500), encoding: .utf8) ?? "<non-UTF8 response>"
+            print("[PlexNetworkClient] \(method) \(sanitized(url)) failed with status \(statusCode): \(responseBody)")
             throw PlexAPIError.invalidResponse
         }
 
@@ -97,5 +100,18 @@ struct PlexNetworkClient {
         request.setValue(clientIdentifier, forHTTPHeaderField: "X-Plex-Client-Identifier")
         request.setValue("macOS", forHTTPHeaderField: "X-Plex-Platform")
         request.setValue("14.0", forHTTPHeaderField: "X-Plex-Platform-Version")
+    }
+
+    private func sanitized(_ url: URL) -> String {
+        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            return url.absoluteString
+        }
+
+        components.queryItems = components.queryItems?.map { item in
+            item.name.caseInsensitiveCompare("X-Plex-Token") == .orderedSame
+                ? URLQueryItem(name: item.name, value: "<redacted>")
+                : item
+        }
+        return components.url?.absoluteString ?? url.absoluteString
     }
 }

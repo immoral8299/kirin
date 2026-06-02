@@ -97,8 +97,7 @@ struct PlexContentService {
 
     func fetchRelatedAlbums(server: PlexServer, albumRatingKey: String, userToken: String, limit: Int = 3) async throws -> [PlexAlbum] {
         let token = server.accessToken ?? userToken
-        let query = [URLQueryItem(name: "count", value: String(limit))]
-        let url = client.buildURL(base: server.baseURL, path: "hubs/metadata/\(albumRatingKey)", query: query)
+        let url = client.buildURL(base: server.baseURL, path: "hubs/metadata/\(albumRatingKey)/related")
         let data = try await client.request(url: url, token: token)
         let container = try client.mediaContainer(from: data)
 
@@ -131,6 +130,27 @@ struct PlexContentService {
         return tracks
     }
 
+    func fetchArtistStation(server: PlexServer, artistRatingKey: String, userToken: String) async throws -> PlexStation? {
+        try await fetchMetadataStation(server: server, ratingKey: artistRatingKey, userToken: userToken)
+    }
+
+    func fetchAlbumRadioTracks(server: PlexServer, albumRatingKey: String, userToken: String, similarAlbumLimit: Int = 4) async throws -> [PlexTrack] {
+        let seedAlbum = PlexAlbum(id: albumRatingKey, title: "", artist: "", artworkURL: nil)
+        let similarAlbums = try await fetchRelatedAlbums(
+            server: server,
+            albumRatingKey: albumRatingKey,
+            userToken: userToken,
+            limit: similarAlbumLimit
+        )
+
+        var tracks = try await fetchAlbumTracks(server: server, album: seedAlbum, userToken: userToken)
+        for album in similarAlbums {
+            tracks.append(contentsOf: try await fetchAlbumTracks(server: server, album: album, userToken: userToken))
+        }
+
+        return deduplicate(tracks)
+    }
+
     // MARK: - Parsing helpers
 
     func parsePlayQueueTracks(from container: [String: Any], server: PlexServer, token: String?) -> [PlexTrack] {
@@ -158,6 +178,7 @@ struct PlexContentService {
                 playQueueItemID: node.string(for: ["playQueueItemID"]),
                 ratingKey: node.string(for: ["ratingKey", "key", "id"]),
                 albumRatingKey: node.string(for: ["parentRatingKey"]),
+                artistRatingKey: node.string(for: ["grandparentRatingKey"]),
                 durationMilliseconds: node.int(for: ["duration"]),
                 title: node.string(for: ["title"]) ?? "Unknown Track",
                 trackArtist: node.string(for: ["originalTitle", "grandparentTitle"]),
@@ -197,6 +218,7 @@ struct PlexContentService {
                 playQueueItemID: nil,
                 ratingKey: node.string(for: ["ratingKey", "key", "id"]),
                 albumRatingKey: node.string(for: ["parentRatingKey"]),
+                artistRatingKey: node.string(for: ["grandparentRatingKey"]),
                 durationMilliseconds: node.int(for: ["duration"]),
                 title: node.string(for: ["title"]) ?? "Unknown Track",
                 trackArtist: node.string(for: ["originalTitle", "grandparentTitle"]),
@@ -276,5 +298,23 @@ struct PlexContentService {
         }
 
         return deduplicate(stations)
+    }
+
+    private func fetchMetadataStation(server: PlexServer, ratingKey: String, userToken: String) async throws -> PlexStation? {
+        let token = server.accessToken ?? userToken
+        let query = [URLQueryItem(name: "includeStations", value: "1")]
+        let url = client.buildURL(base: server.baseURL, path: "library/metadata/\(ratingKey)", query: query)
+        let data = try await client.request(url: url, token: token)
+        let container = try client.mediaContainer(from: data)
+
+        return nestedObjects(in: container).compactMap { node -> PlexStation? in
+            guard let key = node.string(for: ["key"]),
+                  key.contains("/station/"),
+                  let title = node.string(for: ["title"]) else {
+                return nil
+            }
+
+            return PlexStation(id: key, title: title, key: key)
+        }.first
     }
 }

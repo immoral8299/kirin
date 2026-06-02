@@ -13,7 +13,7 @@ final class StatusItemController: NSObject {
     private let stackView = NSStackView(frame: .zero)
     private let panelContainerView: NSView
     private let panelContentView = NSView(frame: .zero)
-    private let rootView: NSHostingView<MenuBarRootView>
+    private var rootView: NSHostingView<MenuBarRootView>!
     private let panel: NSPanel
     private var cancellables = Set<AnyCancellable>()
     private var globalMouseMonitor: Any?
@@ -26,10 +26,11 @@ final class StatusItemController: NSObject {
     private let topRightScreenMargin = NSSize(width: 4, height: 4)
     private let panelSize = NSSize(width: 460, height: 520)
 
+    private let panelState = PanelState()
+
     init(appState: AppState) {
         self.appState = appState
         panelContainerView = Self.makePanelContainerView()
-        rootView = NSHostingView(rootView: MenuBarRootView(appState: appState, onClose: {}, onTabChange: { _ in }))
         panel = NSPanel(
             contentRect: NSRect(origin: .zero, size: panelSize),
             styleMask: [.borderless, .nonactivatingPanel],
@@ -37,8 +38,8 @@ final class StatusItemController: NSObject {
             defer: false
         )
         super.init()
+        rootView = makeRootView()
         configurePanel()
-        rootView.rootView = makeRootView(appState: appState)
         configureButton()
         configureContextMenu()
         configureOutsideClickMonitoring()
@@ -46,6 +47,21 @@ final class StatusItemController: NSObject {
         applyFallbackStatus()
         bind(appState: appState)
         updateStatus(iconName: appState.statusIconName, text: appState.statusLine)
+    }
+
+    private func makeRootView() -> NSHostingView<MenuBarRootView> {
+        NSHostingView(
+            rootView: MenuBarRootView(
+                appState: appState,
+                panelState: panelState,
+                onClose: { [weak self] in
+                    self?.panel.orderOut(nil)
+                },
+                onTabChange: { [weak self] isSettingsTabSelected in
+                    self?.isSettingsTabSelected = isSettingsTabSelected
+                }
+            )
+        )
     }
 
     private func configurePanel() {
@@ -190,18 +206,6 @@ final class StatusItemController: NSObject {
             .store(in: &cancellables)
     }
 
-    private func makeRootView(appState: AppState) -> MenuBarRootView {
-        MenuBarRootView(
-            appState: appState,
-            onClose: { [weak self] in
-                self?.panel.orderOut(nil)
-            },
-            onTabChange: { [weak self] isSettingsTabSelected in
-                self?.isSettingsTabSelected = isSettingsTabSelected
-            }
-        )
-    }
-
     private func applyThemePreference(_ preference: AppThemePreference) {
         let appearance: NSAppearance?
         switch preference {
@@ -291,6 +295,8 @@ final class StatusItemController: NSObject {
     }
 
     private func showPanel() {
+        isSettingsTabSelected = false
+        panelState.openCount += 1
         positionPanel()
         panel.orderFrontRegardless()
     }

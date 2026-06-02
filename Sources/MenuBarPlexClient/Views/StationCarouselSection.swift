@@ -4,6 +4,7 @@ struct StationCarouselSection: View {
     let title: String
     let items: [PlexStation]
     let pageSize: Int
+    let pendingPlaybackID: String?
     let onSelect: (PlexStation) -> Void
     let onPlayNext: (PlexStation) -> Void
     let onAddToQueue: (PlexStation) -> Void
@@ -37,6 +38,7 @@ struct StationCarouselSection: View {
                                     .buttonStyle(.plain)
                                     .interactiveCursor()
                                     .contentShape(Rectangle())
+                                    .pendingPlaybackPulse(pendingPlaybackID == PendingPlaybackID.station(station.id))
                                     .contextMenu {
                                         Button("Play Now") { onSelect(station) }
                                         Button("Play Next") { onPlayNext(station) }

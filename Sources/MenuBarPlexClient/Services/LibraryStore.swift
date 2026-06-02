@@ -23,11 +23,15 @@ final class LibraryStore: ObservableObject {
     @Published var currentLoadingMessage: String?
     @Published var shouldPresentInitialLoadFailure = false
     @Published var relatedAlbums: [PlexAlbum] = []
+    @Published var queueStationRecommendations: [PlexStationRecommendation] = []
 
     private let context: StoreContext
     private let homeFetchLimit = 12
     private var relatedAlbumsTask: Task<Void, Never>?
     private var relatedAlbumsRatingKey: String?
+    private var queueStationRecommendationsTask: Task<Void, Never>?
+    private var queueStationRecommendationSeedIDs: [String] = []
+    private var queueStationRecommendationsGeneration = 0
 
     init(context: StoreContext) {
         self.context = context
@@ -178,6 +182,7 @@ final class LibraryStore: ObservableObject {
         relatedAlbumsTask = nil
         relatedAlbums = []
         relatedAlbumsRatingKey = nil
+        resetQueueStationRecommendations()
     }
 
     func refreshRelatedAlbums(for track: PlexTrack) {
@@ -202,6 +207,9 @@ final class LibraryStore: ObservableObject {
                 )
                 guard !Task.isCancelled else { return }
                 relatedAlbums = albums
+                if albums.isEmpty {
+                    logDebug("No related albums found for album \(albumRatingKey)")
+                }
             } catch {
                 guard !Task.isCancelled else { return }
                 logDebug("Related albums lookup failed: \(error.localizedDescription)")
@@ -209,7 +217,109 @@ final class LibraryStore: ObservableObject {
         }
     }
 
+    func refreshQueueStationRecommendations(for tracks: [PlexTrack]) {
+        let artistSeeds = uniqueArtistSeeds(from: tracks)
+        let albumSeeds = uniqueAlbumSeeds(from: tracks)
+        let seedIDs = artistSeeds.map { "artist-\($0.id)" } + albumSeeds.map { "album-\($0.id)" }
+
+        guard seedIDs != queueStationRecommendationSeedIDs else { return }
+
+        queueStationRecommendationsTask?.cancel()
+        queueStationRecommendations = []
+        queueStationRecommendationSeedIDs = seedIDs
+        queueStationRecommendationsGeneration += 1
+        let generation = queueStationRecommendationsGeneration
+
+        guard !seedIDs.isEmpty,
+              let server = selectedServer,
+              let userToken = context.plexService.authService.authToken else {
+            return
+        }
+
+        queueStationRecommendationsTask = Task {
+            var recommendations: [PlexStationRecommendation] = []
+
+            for seed in artistSeeds {
+                guard !Task.isCancelled else { return }
+                do {
+                    if let station = try await context.plexService.fetchArtistStation(
+                        server: server,
+                        artistRatingKey: seed.id,
+                        userToken: userToken
+                    ) {
+                        recommendations.append(seed.recommendation(kind: .artist, station: station))
+                    }
+                } catch {
+                    logDebug("Artist station lookup failed: \(error.localizedDescription)")
+                }
+            }
+
+            for seed in albumSeeds {
+                guard !Task.isCancelled else { return }
+                recommendations.append(seed.recommendation(kind: .album))
+            }
+
+            guard !Task.isCancelled, generation == queueStationRecommendationsGeneration else { return }
+            queueStationRecommendations = recommendations
+        }
+    }
+
+    func resetQueueStationRecommendations() {
+        queueStationRecommendationsTask?.cancel()
+        queueStationRecommendationsTask = nil
+        queueStationRecommendations = []
+        queueStationRecommendationSeedIDs = []
+        queueStationRecommendationsGeneration += 1
+    }
+
     // MARK: - Private
+
+    private struct QueueStationSeed {
+        let id: String
+        let title: String
+        let artworkURL: URL?
+
+        func recommendation(kind: PlexStationRecommendationKind, station: PlexStation? = nil) -> PlexStationRecommendation {
+            PlexStationRecommendation(
+                kind: kind,
+                seedID: id,
+                title: title,
+                subtitle: kind == .artist ? "Artist Radio" : "Album Radio",
+                artworkURL: artworkURL,
+                station: station
+            )
+        }
+    }
+
+    private func uniqueArtistSeeds(from tracks: [PlexTrack]) -> [QueueStationSeed] {
+        var seenIDs = Set<String>()
+        return tracks.compactMap { track -> QueueStationSeed? in
+            guard seenIDs.count < 2,
+                  let id = track.artistRatingKey,
+                  seenIDs.insert(id).inserted else {
+                return nil
+            }
+
+            return QueueStationSeed(
+                id: id,
+                title: track.albumArtist ?? track.trackArtist ?? "Unknown Artist",
+                artworkURL: track.artworkURL
+            )
+        }
+    }
+
+    private func uniqueAlbumSeeds(from tracks: [PlexTrack]) -> [QueueStationSeed] {
+        var seenIDs = Set<String>()
+        return tracks.compactMap { track -> QueueStationSeed? in
+            guard seenIDs.count < 2,
+                  let id = track.albumRatingKey,
+                  seenIDs.insert(id).inserted else {
+                return nil
+            }
+
+            return QueueStationSeed(id: id, title: track.albumName, artworkURL: track.artworkURL)
+        }
+    }
 
     private func reloadLibrariesAndContentForSelectedServer(id: String) async {
         guard let userToken = context.plexService.authService.authToken,

@@ -37,6 +37,7 @@ struct MediaTrack: Identifiable, Hashable {
     let playQueueItemID: String?
     let ratingKey: String?
     let albumRatingKey: String?
+    let artistRatingKey: String?
     let durationMilliseconds: Int?
     let title: String
     let trackArtist: String?

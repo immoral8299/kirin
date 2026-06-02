@@ -128,6 +128,34 @@ struct PlexPlayQueueService {
         )
     }
 
+    func createTrackListPlayQueue(server: PlexServer, library: PlexMusicLibrary, tracks: [PlexTrack], userToken: String) async throws -> PlexPlayQueueSnapshot {
+        let token = server.accessToken ?? userToken
+        let query = [
+            URLQueryItem(name: "uri", value: try trackListURI(library: library, tracks: tracks)),
+            URLQueryItem(name: "type", value: "audio"),
+        ]
+
+        let url = client.buildURL(base: server.baseURL, path: "playQueues", query: query)
+        let container = try await client.requestContainer(url: url, token: token, method: "POST")
+        guard let playQueueID = container.int(for: ["playQueueID"]) else {
+            throw PlexAPIError.invalidResponse
+        }
+
+        let totalCount = max(container.int(for: ["playQueueTotalCount"]) ?? tracks.count, 1)
+        return try await fetchPlayQueue(server: server, playQueueID: playQueueID, itemCount: totalCount, userToken: userToken)
+    }
+
+    func addTracksToPlayQueue(server: PlexServer, library: PlexMusicLibrary, tracks: [PlexTrack], playQueueID: Int, playNext: Bool, userToken: String) async throws -> PlexPlayQueueSnapshot {
+        try await addToPlayQueue(
+            server: server,
+            playQueueID: playQueueID,
+            uri: try trackListURI(library: library, tracks: tracks),
+            playlistID: nil,
+            playNext: playNext,
+            userToken: userToken
+        )
+    }
+
     func removePlayQueueItem(server: PlexServer, playQueueID: Int, playQueueItemID: String, itemCount: Int, userToken: String) async throws -> PlexPlayQueueSnapshot {
         let token = server.accessToken ?? userToken
         let url = client.buildURL(base: server.baseURL, path: "playQueues/\(playQueueID)/items/\(playQueueItemID)")
@@ -174,6 +202,19 @@ struct PlexPlayQueueService {
         allowedCharacters.remove(charactersIn: "/")
         let encodedPath = metadataPath.addingPercentEncoding(withAllowedCharacters: allowedCharacters) ?? metadataPath
         return "library://\(uuid)/item/\(encodedPath)"
+    }
+
+    private func trackListURI(library _: PlexMusicLibrary, tracks: [PlexTrack]) throws -> String {
+        let ratingKeys = tracks.compactMap(\.ratingKey)
+        guard !ratingKeys.isEmpty else {
+            throw PlexAPIError.noTracksInLibrary
+        }
+
+        let metadataPath = "/library/metadata/\(ratingKeys.joined(separator: ","))"
+        var allowedCharacters = CharacterSet.urlPathAllowed
+        allowedCharacters.remove(charactersIn: "/")
+        let encodedPath = metadataPath.addingPercentEncoding(withAllowedCharacters: allowedCharacters) ?? metadataPath
+        return "library:///directory/\(encodedPath)"
     }
 
     private func fetchPlayQueue(server: PlexServer, playQueueID: Int, itemCount: Int, centeredOn playQueueItemID: String? = nil, userToken: String) async throws -> PlexPlayQueueSnapshot {

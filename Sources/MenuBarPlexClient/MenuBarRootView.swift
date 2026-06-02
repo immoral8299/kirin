@@ -1,5 +1,11 @@
 import AppKit
+import Combine
 import SwiftUI
+
+@MainActor
+final class PanelState: ObservableObject {
+    @Published var openCount = 0
+}
 
 enum MenuBarLayout {
     static let contentWidth: CGFloat = 436
@@ -17,12 +23,14 @@ struct MenuBarRootView: View {
     let appState: AppState
     let onClose: () -> Void
     let onTabChange: (Bool) -> Void
+    @ObservedObject var panelState: PanelState
     @ObservedObject private var authService: PlexAuthService
     @ObservedObject private var settingsStore: SettingsStore
     @State private var selectedTab: ContentTab = .home
 
-    init(appState: AppState, onClose: @escaping () -> Void, onTabChange: @escaping (Bool) -> Void) {
+    init(appState: AppState, panelState: PanelState, onClose: @escaping () -> Void, onTabChange: @escaping (Bool) -> Void) {
         self.appState = appState
+        self.panelState = panelState
         self.onClose = onClose
         self.onTabChange = onTabChange
         _authService = ObservedObject(wrappedValue: appState.authService)
@@ -57,6 +65,7 @@ struct MenuBarRootView: View {
         )
         .foregroundStyle(.primary)
         .preferredColorScheme(settingsStore.settings.themePreference.colorScheme)
+        .id(panelState.openCount)
     }
 
     @ViewBuilder
@@ -304,27 +313,29 @@ private struct HomeContent: View {
     let appState: AppState
     @ObservedObject private var libraryStore: LibraryStore
     @ObservedObject private var settingsStore: SettingsStore
+    @ObservedObject private var queueManager: QueueManager
 
     init(appState: AppState) {
         self.appState = appState
         _libraryStore = ObservedObject(wrappedValue: appState.libraryStore)
         _settingsStore = ObservedObject(wrappedValue: appState.settingsStore)
+        _queueManager = ObservedObject(wrappedValue: appState.queueManager)
     }
 
     var body: some View {
         let visibility = settingsStore.settings.sectionVisibility
 
         if visibility.showRecentlyPlayedAlbums && !libraryStore.recentlyPlayedAlbums.isEmpty {
-            AlbumCarouselSection(title: "Recently Played", items: libraryStore.recentlyPlayedAlbums, pageSize: 4, onSelect: appState.playAlbum, onPlayNext: { appState.enqueueAlbum($0, playNext: true) }, onAddToQueue: { appState.enqueueAlbum($0, playNext: false) })
+            AlbumCarouselSection(title: "Recently Played", items: libraryStore.recentlyPlayedAlbums, pageSize: 4, sectionID: "recently-played", pendingPlaybackID: queueManager.pendingPlaybackID, pendingPlaybackSource: queueManager.pendingPlaybackSource, onSelect: { appState.playAlbum($0, source: "recently-played") }, onPlayNext: { appState.enqueueAlbum($0, playNext: true) }, onAddToQueue: { appState.enqueueAlbum($0, playNext: false) })
         }
         if visibility.showRecentlyAddedAlbums && !libraryStore.recentlyAddedAlbums.isEmpty {
-            AlbumCarouselSection(title: "Recently Added", items: libraryStore.recentlyAddedAlbums, pageSize: 4, onSelect: appState.playAlbum, onPlayNext: { appState.enqueueAlbum($0, playNext: true) }, onAddToQueue: { appState.enqueueAlbum($0, playNext: false) })
+            AlbumCarouselSection(title: "Recently Added", items: libraryStore.recentlyAddedAlbums, pageSize: 4, sectionID: "recently-added", pendingPlaybackID: queueManager.pendingPlaybackID, pendingPlaybackSource: queueManager.pendingPlaybackSource, onSelect: { appState.playAlbum($0, source: "recently-added") }, onPlayNext: { appState.enqueueAlbum($0, playNext: true) }, onAddToQueue: { appState.enqueueAlbum($0, playNext: false) })
         }
         if visibility.showPlaylists && !libraryStore.playlists.isEmpty {
-            PlaylistCarouselSection(title: "Playlists", items: libraryStore.playlists, pageSize: 4, onSelect: appState.playPlaylist, onPlayNext: { appState.enqueuePlaylist($0, playNext: true) }, onAddToQueue: { appState.enqueuePlaylist($0, playNext: false) })
+            PlaylistCarouselSection(title: "Playlists", items: libraryStore.playlists, pageSize: 4, pendingPlaybackID: queueManager.pendingPlaybackID, onSelect: appState.playPlaylist, onPlayNext: { appState.enqueuePlaylist($0, playNext: true) }, onAddToQueue: { appState.enqueuePlaylist($0, playNext: false) })
         }
         if visibility.showStations && !libraryStore.stations.isEmpty {
-            StationCarouselSection(title: "Stations", items: libraryStore.stations, pageSize: 4, onSelect: appState.playStation, onPlayNext: { appState.enqueueStation($0, playNext: true) }, onAddToQueue: { appState.enqueueStation($0, playNext: false) })
+            StationCarouselSection(title: "Stations", items: libraryStore.stations, pageSize: 4, pendingPlaybackID: queueManager.pendingPlaybackID, onSelect: appState.playStation, onPlayNext: { appState.enqueueStation($0, playNext: true) }, onAddToQueue: { appState.enqueueStation($0, playNext: false) })
         }
         if !libraryStore.isLoadingLibrary,
            libraryStore.recentlyPlayedAlbums.isEmpty,
@@ -339,17 +350,29 @@ private struct HomeContent: View {
 private struct QueueContent: View {
     let appState: AppState
     @ObservedObject private var libraryStore: LibraryStore
+    @ObservedObject private var queueManager: QueueManager
 
     init(appState: AppState) {
         self.appState = appState
         _libraryStore = ObservedObject(wrappedValue: appState.libraryStore)
+        _queueManager = ObservedObject(wrappedValue: appState.queueManager)
     }
 
     var body: some View {
+        if !libraryStore.queueStationRecommendations.isEmpty {
+            QueueStationRecommendationsSection(
+                recommendations: libraryStore.queueStationRecommendations,
+                pendingPlaybackID: queueManager.pendingPlaybackID,
+                onSelect: appState.playStationRecommendation,
+                onAddToQueue: appState.enqueueStationRecommendation
+            )
+        }
         if !libraryStore.relatedAlbums.isEmpty {
             RelatedAlbumsSection(
                 albums: libraryStore.relatedAlbums,
-                onSelect: appState.playAlbum,
+                pendingPlaybackID: queueManager.pendingPlaybackID,
+                pendingPlaybackSource: queueManager.pendingPlaybackSource,
+                onSelect: { appState.playAlbum($0, source: "related-albums") },
                 onPlayNext: { appState.enqueueAlbum($0, playNext: true) },
                 onAddToQueue: { appState.enqueueAlbum($0, playNext: false) }
             )

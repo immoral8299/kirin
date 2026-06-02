@@ -4,6 +4,9 @@ struct AlbumCarouselSection: View {
     let title: String
     let items: [PlexAlbum]
     let pageSize: Int
+    let sectionID: String
+    let pendingPlaybackID: String?
+    let pendingPlaybackSource: String?
     let onSelect: (PlexAlbum) -> Void
     let onPlayNext: (PlexAlbum) -> Void
     let onAddToQueue: (PlexAlbum) -> Void
@@ -37,6 +40,7 @@ struct AlbumCarouselSection: View {
                             .interactiveCursor()
                             .contentShape(Rectangle())
                             .frame(width: 100, alignment: .leading)
+                            .pendingPlaybackPulse(pendingPlaybackID == PendingPlaybackID.album(album.id) && pendingPlaybackSource == sectionID)
                             .contextMenu {
                                 Button("Play Now") { onSelect(album) }
                                 Button("Play Next") { onPlayNext(album) }

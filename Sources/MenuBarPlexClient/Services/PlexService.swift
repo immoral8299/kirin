@@ -349,6 +349,14 @@ final class PlexService: MediaService {
         try await content.fetchPlaylistTracks(server: server, playlist: playlist, userToken: userToken)
     }
 
+    func fetchArtistStation(server: PlexServer, artistRatingKey: String, userToken: String) async throws -> PlexStation? {
+        try await content.fetchArtistStation(server: server, artistRatingKey: artistRatingKey, userToken: userToken)
+    }
+
+    func fetchAlbumRadioTracks(server: PlexServer, albumRatingKey: String, userToken: String) async throws -> [PlexTrack] {
+        try await content.fetchAlbumRadioTracks(server: server, albumRatingKey: albumRatingKey, userToken: userToken)
+    }
+
     func fetchLastPlayedTrack(server: PlexServer, library: PlexMusicLibrary, userToken: String) async throws -> PlexTrack? {
         try await content.fetchLastPlayedTrack(server: server, library: library, userToken: userToken)
     }
@@ -387,6 +395,14 @@ final class PlexService: MediaService {
 
     func addStationToPlayQueue(server: PlexServer, station: PlexStation, playQueueID: Int, playNext: Bool, userToken: String) async throws -> PlexPlayQueueSnapshot {
         try await queue.addStationToPlayQueue(server: server, station: station, playQueueID: playQueueID, playNext: playNext, userToken: userToken)
+    }
+
+    func createTrackListPlayQueue(server: PlexServer, library: PlexMusicLibrary, tracks: [PlexTrack], userToken: String) async throws -> PlexPlayQueueSnapshot {
+        try await queue.createTrackListPlayQueue(server: server, library: library, tracks: tracks, userToken: userToken)
+    }
+
+    func addTracksToPlayQueue(server: PlexServer, library: PlexMusicLibrary, tracks: [PlexTrack], playQueueID: Int, playNext: Bool, userToken: String) async throws -> PlexPlayQueueSnapshot {
+        try await queue.addTracksToPlayQueue(server: server, library: library, tracks: tracks, playQueueID: playQueueID, playNext: playNext, userToken: userToken)
     }
 
     func removePlayQueueItem(server: PlexServer, playQueueID: Int, playQueueItemID: String, itemCount: Int, userToken: String) async throws -> PlexPlayQueueSnapshot {

@@ -2,6 +2,8 @@ import SwiftUI
 
 struct RelatedAlbumsSection: View {
     let albums: [PlexAlbum]
+    let pendingPlaybackID: String?
+    let pendingPlaybackSource: String?
     let onSelect: (PlexAlbum) -> Void
     let onPlayNext: (PlexAlbum) -> Void
     let onAddToQueue: (PlexAlbum) -> Void
@@ -33,6 +35,7 @@ struct RelatedAlbumsSection: View {
                         }
                         .buttonStyle(.plain)
                         .interactiveCursor()
+                        .pendingPlaybackPulse(pendingPlaybackID == PendingPlaybackID.album(album.id) && pendingPlaybackSource == "related-albums")
 
                         HStack(spacing: 6) {
                             albumQueueButton(icon: "text.line.first.and.arrowtriangle.forward", help: "Play Album Next") {

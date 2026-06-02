@@ -243,6 +243,10 @@ final class AppState {
         queueManager.playAlbum(album)
     }
 
+    func playAlbum(_ album: PlexAlbum, source: String?) {
+        queueManager.playAlbum(album, source: source)
+    }
+
     func playPlaylist(_ playlist: PlexPlaylist) {
         queueManager.playPlaylist(playlist)
     }
@@ -261,6 +265,14 @@ final class AppState {
 
     func enqueueStation(_ station: PlexStation, playNext: Bool) {
         queueManager.enqueueStation(station, playNext: playNext)
+    }
+
+    func playStationRecommendation(_ recommendation: PlexStationRecommendation) {
+        queueManager.playStationRecommendation(recommendation)
+    }
+
+    func enqueueStationRecommendation(_ recommendation: PlexStationRecommendation) {
+        queueManager.enqueueStationRecommendation(recommendation)
     }
 
     // MARK: - Queue

@@ -25,6 +25,7 @@ extension PlexTrack {
             playQueueItemID: playQueueItemID,
             ratingKey: ratingKey,
             albumRatingKey: albumRatingKey,
+            artistRatingKey: artistRatingKey,
             durationMilliseconds: durationMilliseconds,
             title: title,
             trackArtist: trackArtist,
