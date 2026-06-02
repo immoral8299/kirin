@@ -189,7 +189,6 @@ final class LibraryStore: ObservableObject {
         guard relatedAlbumsRatingKey != track.albumRatingKey || relatedAlbums.isEmpty else { return }
 
         relatedAlbumsTask?.cancel()
-        relatedAlbums = []
         relatedAlbumsRatingKey = track.albumRatingKey
 
         guard let albumRatingKey = track.albumRatingKey,
@@ -225,7 +224,6 @@ final class LibraryStore: ObservableObject {
         guard seedIDs != queueStationRecommendationSeedIDs else { return }
 
         queueStationRecommendationsTask?.cancel()
-        queueStationRecommendations = []
         queueStationRecommendationSeedIDs = seedIDs
         queueStationRecommendationsGeneration += 1
         let generation = queueStationRecommendationsGeneration

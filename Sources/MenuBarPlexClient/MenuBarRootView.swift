@@ -325,25 +325,33 @@ private struct HomeContent: View {
     var body: some View {
         let visibility = settingsStore.settings.sectionVisibility
 
-        if visibility.showRecentlyPlayedAlbums && !libraryStore.recentlyPlayedAlbums.isEmpty {
-            AlbumCarouselSection(title: "Recently Played", items: libraryStore.recentlyPlayedAlbums, pageSize: 4, sectionID: "recently-played", pendingPlaybackID: queueManager.pendingPlaybackID, pendingPlaybackSource: queueManager.pendingPlaybackSource, onSelect: { appState.playAlbum($0, source: "recently-played") }, onPlayNext: { appState.enqueueAlbum($0, playNext: true) }, onAddToQueue: { appState.enqueueAlbum($0, playNext: false) })
+        VStack(spacing: 14) {
+            if visibility.showRecentlyPlayedAlbums && !libraryStore.recentlyPlayedAlbums.isEmpty {
+                AlbumCarouselSection(title: "Recently Played", items: libraryStore.recentlyPlayedAlbums, pageSize: 4, sectionID: "recently-played", pendingPlaybackID: queueManager.pendingPlaybackID, pendingPlaybackSource: queueManager.pendingPlaybackSource, onSelect: { appState.playAlbum($0, source: "recently-played") }, onPlayNext: { appState.enqueueAlbum($0, playNext: true) }, onAddToQueue: { appState.enqueueAlbum($0, playNext: false) })
+                    .transition(.opacity)
+            }
+            if visibility.showRecentlyAddedAlbums && !libraryStore.recentlyAddedAlbums.isEmpty {
+                AlbumCarouselSection(title: "Recently Added", items: libraryStore.recentlyAddedAlbums, pageSize: 4, sectionID: "recently-added", pendingPlaybackID: queueManager.pendingPlaybackID, pendingPlaybackSource: queueManager.pendingPlaybackSource, onSelect: { appState.playAlbum($0, source: "recently-added") }, onPlayNext: { appState.enqueueAlbum($0, playNext: true) }, onAddToQueue: { appState.enqueueAlbum($0, playNext: false) })
+                    .transition(.opacity)
+            }
+            if visibility.showPlaylists && !libraryStore.playlists.isEmpty {
+                PlaylistCarouselSection(title: "Playlists", items: libraryStore.playlists, pageSize: 4, pendingPlaybackID: queueManager.pendingPlaybackID, onSelect: appState.playPlaylist, onPlayNext: { appState.enqueuePlaylist($0, playNext: true) }, onAddToQueue: { appState.enqueuePlaylist($0, playNext: false) })
+                    .transition(.opacity)
+            }
+            if visibility.showStations && !libraryStore.stations.isEmpty {
+                StationCarouselSection(title: "Stations", items: libraryStore.stations, pageSize: 4, pendingPlaybackID: queueManager.pendingPlaybackID, onSelect: appState.playStation, onPlayNext: { appState.enqueueStation($0, playNext: true) }, onAddToQueue: { appState.enqueueStation($0, playNext: false) })
+                    .transition(.opacity)
+            }
+            if !libraryStore.isLoadingLibrary,
+               libraryStore.recentlyPlayedAlbums.isEmpty,
+               libraryStore.recentlyAddedAlbums.isEmpty,
+               libraryStore.playlists.isEmpty,
+               libraryStore.stations.isEmpty {
+                EmptyLibraryCard()
+                    .transition(.opacity)
+            }
         }
-        if visibility.showRecentlyAddedAlbums && !libraryStore.recentlyAddedAlbums.isEmpty {
-            AlbumCarouselSection(title: "Recently Added", items: libraryStore.recentlyAddedAlbums, pageSize: 4, sectionID: "recently-added", pendingPlaybackID: queueManager.pendingPlaybackID, pendingPlaybackSource: queueManager.pendingPlaybackSource, onSelect: { appState.playAlbum($0, source: "recently-added") }, onPlayNext: { appState.enqueueAlbum($0, playNext: true) }, onAddToQueue: { appState.enqueueAlbum($0, playNext: false) })
-        }
-        if visibility.showPlaylists && !libraryStore.playlists.isEmpty {
-            PlaylistCarouselSection(title: "Playlists", items: libraryStore.playlists, pageSize: 4, pendingPlaybackID: queueManager.pendingPlaybackID, onSelect: appState.playPlaylist, onPlayNext: { appState.enqueuePlaylist($0, playNext: true) }, onAddToQueue: { appState.enqueuePlaylist($0, playNext: false) })
-        }
-        if visibility.showStations && !libraryStore.stations.isEmpty {
-            StationCarouselSection(title: "Stations", items: libraryStore.stations, pageSize: 4, pendingPlaybackID: queueManager.pendingPlaybackID, onSelect: appState.playStation, onPlayNext: { appState.enqueueStation($0, playNext: true) }, onAddToQueue: { appState.enqueueStation($0, playNext: false) })
-        }
-        if !libraryStore.isLoadingLibrary,
-           libraryStore.recentlyPlayedAlbums.isEmpty,
-           libraryStore.recentlyAddedAlbums.isEmpty,
-           libraryStore.playlists.isEmpty,
-           libraryStore.stations.isEmpty {
-            EmptyLibraryCard()
-        }
+        .animation(.easeInOut(duration: 0.25), value: libraryStore.recentlyPlayedAlbums.count + libraryStore.recentlyAddedAlbums.count + libraryStore.playlists.count + libraryStore.stations.count)
     }
 }
 
@@ -359,31 +367,36 @@ private struct QueueContent: View {
     }
 
     var body: some View {
-        if !libraryStore.queueStationRecommendations.isEmpty {
-            QueueStationRecommendationsSection(
-                recommendations: libraryStore.queueStationRecommendations,
-                pendingPlaybackID: queueManager.pendingPlaybackID,
-                onSelect: appState.playStationRecommendation,
-                onAddToQueue: appState.enqueueStationRecommendation
+        VStack(spacing: 14) {
+            if !libraryStore.queueStationRecommendations.isEmpty {
+                QueueStationRecommendationsSection(
+                    recommendations: libraryStore.queueStationRecommendations,
+                    pendingPlaybackID: queueManager.pendingPlaybackID,
+                    onSelect: appState.playStationRecommendation,
+                    onAddToQueue: appState.enqueueStationRecommendation
+                )
+                .transition(.opacity)
+            }
+            if !libraryStore.relatedAlbums.isEmpty {
+                RelatedAlbumsSection(
+                    albums: libraryStore.relatedAlbums,
+                    pendingPlaybackID: queueManager.pendingPlaybackID,
+                    pendingPlaybackSource: queueManager.pendingPlaybackSource,
+                    onSelect: { appState.playAlbum($0, source: "related-albums") },
+                    onPlayNext: { appState.enqueueAlbum($0, playNext: true) },
+                    onAddToQueue: { appState.enqueueAlbum($0, playNext: false) }
+                )
+                .transition(.opacity)
+            }
+            PlayQueueView(
+                queueManager: appState.queueManager,
+                onRefresh: appState.refreshPlayQueue,
+                onSelectTrack: appState.selectPlayQueueTrack,
+                onRemoveTrack: appState.removePlayQueueTrack,
+                onMoveTrack: appState.movePlayQueueTrack,
+                onClearUpcomingTracks: appState.clearUpcomingPlayQueueTracks
             )
         }
-        if !libraryStore.relatedAlbums.isEmpty {
-            RelatedAlbumsSection(
-                albums: libraryStore.relatedAlbums,
-                pendingPlaybackID: queueManager.pendingPlaybackID,
-                pendingPlaybackSource: queueManager.pendingPlaybackSource,
-                onSelect: { appState.playAlbum($0, source: "related-albums") },
-                onPlayNext: { appState.enqueueAlbum($0, playNext: true) },
-                onAddToQueue: { appState.enqueueAlbum($0, playNext: false) }
-            )
-        }
-        PlayQueueView(
-            queueManager: appState.queueManager,
-            onRefresh: appState.refreshPlayQueue,
-            onSelectTrack: appState.selectPlayQueueTrack,
-            onRemoveTrack: appState.removePlayQueueTrack,
-            onMoveTrack: appState.movePlayQueueTrack,
-            onClearUpcomingTracks: appState.clearUpcomingPlayQueueTracks
-        )
+        .animation(.easeInOut(duration: 0.25), value: libraryStore.queueStationRecommendations.count + libraryStore.relatedAlbums.count)
     }
 }
