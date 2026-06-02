@@ -15,7 +15,7 @@ enum PlaybackState: String, Codable {
         case .stopped:
             return "stop.fill"
         case .buffering:
-            return "hourglass"
+            return "arrow.triangle.2.circlepath"
         }
     }
 
@@ -26,7 +26,7 @@ enum PlaybackState: String, Codable {
         case .paused, .stopped:
             return "play.fill"
         case .buffering:
-            return "hourglass"
+            return "play.fill"
         }
     }
 }

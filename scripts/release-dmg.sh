@@ -17,6 +17,9 @@ ZIP_PATH="$DIST_DIR/$APP_NAME.zip"
 DMG_PATH="$DIST_DIR/$APP_NAME.dmg"
 INFO_PLIST_TEMPLATE="$ROOT_DIR/Packaging/PlexTray-Info.plist"
 INFO_PLIST_PATH="$CONTENTS_DIR/Info.plist"
+ICON_SVG_PATH="$ROOT_DIR/Packaging/PlexTray.svg"
+ICON_PATH="$RESOURCES_DIR/PlexTray.icns"
+ICON_BUILD_SCRIPT="$ROOT_DIR/scripts/build-icns-from-svg.sh"
 
 VERSION="${VERSION:-0.1.0}"
 BUILD_NUMBER="${BUILD_NUMBER:-1}"
@@ -50,11 +53,15 @@ cp "$INFO_PLIST_TEMPLATE" "$INFO_PLIST_PATH"
 
 install -m 755 "$EXECUTABLE_PATH" "$MACOS_DIR/$APP_NAME"
 
-if [[ -f "$ROOT_DIR/Packaging/PlexTray.icns" ]]; then
-    cp "$ROOT_DIR/Packaging/PlexTray.icns" "$RESOURCES_DIR/PlexTray.icns"
-    /usr/libexec/PlistBuddy -c "Add :CFBundleIconFile string PlexTray.icns" "$INFO_PLIST_PATH" || \
-        /usr/libexec/PlistBuddy -c "Set :CFBundleIconFile PlexTray.icns" "$INFO_PLIST_PATH"
+if [[ ! -x "$ICON_BUILD_SCRIPT" ]]; then
+    echo "Could not find executable app icon build script: $ICON_BUILD_SCRIPT" >&2
+    exit 1
 fi
+
+echo "Generating app icon from SVG"
+"$ICON_BUILD_SCRIPT" "$ICON_SVG_PATH" "$ICON_PATH"
+/usr/libexec/PlistBuddy -c "Add :CFBundleIconFile string PlexTray.icns" "$INFO_PLIST_PATH" || \
+    /usr/libexec/PlistBuddy -c "Set :CFBundleIconFile PlexTray.icns" "$INFO_PLIST_PATH"
 
 if [[ -n "$SIGNING_IDENTITY" ]]; then
     echo "Signing $APP_NAME.app"

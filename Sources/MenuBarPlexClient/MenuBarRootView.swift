@@ -168,14 +168,25 @@ struct MenuBarRootView: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
 
+                Spacer()
+
                 if appState.isLoadingLibrary, appState.hasExistingContent {
-                    Spacer()
                     ProgressView()
                         .controlSize(.small)
                     Text("Refreshing...")
                         .font(.system(size: 10, weight: .medium, design: .rounded))
                         .foregroundStyle(.white.opacity(0.68))
                 }
+
+                Button {
+                    appState.refreshLibraryContent()
+                } label: {
+                    Image(systemName: "arrow.clockwise.circle")
+                        .foregroundStyle(.green)
+                }
+                .buttonStyle(.plain)
+                .focusable(false)
+                .interactiveCursor()
             }
             .padding(8)
             .frame(width: MenuBarLayout.contentWidth, alignment: .leading)
@@ -235,27 +246,7 @@ struct MenuBarRootView: View {
     private var authButton: some View {
         switch appState.authService.status.state {
         case .authenticated:
-            HStack(spacing: 10) {
-                Button {
-                    appState.refreshLibraryContent()
-                } label: {
-                    Image(systemName: "arrow.clockwise.circle")
-                        .foregroundStyle(.green)
-                }
-                .buttonStyle(.plain)
-                .focusable(false)
-                .interactiveCursor()
-
-                Button {
-                    appState.signOut()
-                } label: {
-                    Image(systemName: "rectangle.portrait.and.arrow.right")
-                        .foregroundStyle(.white.opacity(0.85))
-                }
-                .buttonStyle(.plain)
-                .focusable(false)
-                .interactiveCursor()
-            }
+            EmptyView()
         case .requestingPin, .waitingForBrowserLogin:
             ProgressView()
                 .controlSize(.small)
@@ -432,33 +423,41 @@ private struct NowPlayingCard: View {
 
     var body: some View {
         VStack(spacing: 10) {
-            HStack(spacing: 12) {
+            HStack(alignment: .top, spacing: 12) {
                 ArtworkImage(url: metadata.artworkURL, placeholderSystemImage: "music.note.list")
-                .frame(width: 86, height: 86)
-                .clipShape(RoundedRectangle(cornerRadius: AppCornerRadius.compact, style: .continuous))
+                    .frame(width: 128, height: 128)
+                    .clipShape(RoundedRectangle(cornerRadius: AppCornerRadius.compact, style: .continuous))
 
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(metadata.trackName)
-                        .font(.system(size: 17, weight: .semibold, design: .rounded))
-                        .lineLimit(1)
-                    Text(metadata.resolvedTrackArtist)
-                        .font(.system(size: 13, weight: .medium, design: .rounded))
-                        .foregroundStyle(.white.opacity(0.82))
-                        .lineLimit(1)
-                    Text(metadata.albumName)
-                        .font(.system(size: 12, weight: .regular, design: .rounded))
-                        .foregroundStyle(.white.opacity(0.68))
-                        .lineLimit(1)
+                VStack(alignment: .leading, spacing: 10) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(metadata.trackName)
+                            .font(.system(size: 17, weight: .semibold, design: .rounded))
+                            .lineLimit(1)
+                        Text(metadata.resolvedTrackArtist)
+                            .font(.system(size: 13, weight: .medium, design: .rounded))
+                            .foregroundStyle(.white.opacity(0.82))
+                            .lineLimit(1)
+                        Text(metadata.albumName)
+                            .font(.system(size: 12, weight: .regular, design: .rounded))
+                            .foregroundStyle(.white.opacity(0.68))
+                            .lineLimit(1)
+                    }
+
+                    Spacer(minLength: 0)
+
+                    HStack(spacing: 16) {
+                        transportButton(icon: "backward.fill", action: onPrevious)
+                        transportButton(
+                            icon: playbackState.actionSystemImageName,
+                            showsProgress: playbackState == .buffering,
+                            action: onPlayPause
+                        )
+                        transportButton(icon: "forward.fill", action: onNext)
+                        transportButton(icon: "shuffle", isActive: isShuffleEnabled, action: onToggleShuffle)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .center)
                 }
-
-                Spacer()
-            }
-
-            HStack(spacing: 16) {
-                transportButton(icon: "backward.fill", action: onPrevious)
-                transportButton(icon: playbackState.actionSystemImageName, action: onPlayPause)
-                transportButton(icon: "forward.fill", action: onNext)
-                transportButton(icon: "shuffle", isActive: isShuffleEnabled, action: onToggleShuffle)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
 
             VStack(spacing: 4) {
@@ -476,6 +475,7 @@ private struct NowPlayingCard: View {
                         isSeeking = editing
                     }
                 )
+                .tint(AppTheme.accent)
 
                 HStack {
                     Text(formattedTime(playbackPosition))
@@ -497,12 +497,25 @@ private struct NowPlayingCard: View {
         }
     }
 
-    private func transportButton(icon: String, isActive: Bool = false, action: @escaping () -> Void) -> some View {
+    private func transportButton(
+        icon: String,
+        isActive: Bool = false,
+        showsProgress: Bool = false,
+        action: @escaping () -> Void
+    ) -> some View {
         Button(action: action) {
-            Image(systemName: icon)
-                .font(.system(size: 12, weight: .semibold))
-                .frame(width: 36, height: 36)
-                .background((isActive ? AppTheme.accentActiveBackground : AppTheme.transportFill), in: Circle())
+            Group {
+                if showsProgress {
+                    ProgressView()
+                        .controlSize(.small)
+                } else {
+                    Image(systemName: icon)
+                        .font(.system(size: 13, weight: .semibold))
+                        .offset(y: -1)
+                }
+            }
+            .frame(width: 36, height: 36, alignment: .center)
+            .background((isActive ? AppTheme.accentActiveBackground : AppTheme.transportFill), in: Circle())
         }
         .buttonStyle(.plain)
         .interactiveCursor()
@@ -849,6 +862,19 @@ private struct SettingsView: View {
                 }
 
                 Button {
+                    appState.signOut()
+                } label: {
+                    Label("Log Out", systemImage: "rectangle.portrait.and.arrow.right")
+                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                }
+                .buttonStyle(.plain)
+                .focusable(false)
+                .offset(x: 4)
+                .interactiveCursor()
+                .foregroundStyle(.white.opacity(0.85))
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                Button {
                     NSApp.terminate(nil)
                 } label: {
                     Label("Quit", systemImage: "power")
@@ -856,8 +882,10 @@ private struct SettingsView: View {
                 }
                 .buttonStyle(.plain)
                 .focusable(false)
+                .offset(x: 4)
                 .interactiveCursor()
                 .foregroundStyle(.red.opacity(0.9))
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
