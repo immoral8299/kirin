@@ -106,7 +106,13 @@ final class LibraryStore: ObservableObject {
         }
     }
 
-    func refreshLibraryContent() {
+    func refreshCurrentLibraryContent() {
+        Task {
+            await reloadHomeContentForSelection()
+        }
+    }
+
+    func refreshServersAndLibraries() {
         Task {
             await refreshCurrentSelection()
         }

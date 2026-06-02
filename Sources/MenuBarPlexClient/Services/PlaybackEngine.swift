@@ -6,6 +6,7 @@ import Foundation
 protocol PlaybackEngineDelegate: AnyObject {
     func playbackEngineDidEndCurrentTrack(_ engine: PlaybackEngine)
     func playbackEngine(_ engine: PlaybackEngine, didUpdatePosition position: Double, duration: Double)
+    func playbackEngine(_ engine: PlaybackEngine, didTransitionTo state: PlaybackState)
 }
 
 @MainActor
@@ -258,7 +259,7 @@ final class PlaybackEngine: ObservableObject {
     private func observePlaybackTime() {
         guard let player, timeObserverToken == nil else { return }
 
-        let interval = CMTime(seconds: 0.25, preferredTimescale: 600)
+        let interval = CMTime(seconds: 1, preferredTimescale: 600)
         timeObserverToken = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] time in
             guard let self else { return }
             Task { @MainActor in
@@ -269,7 +270,8 @@ final class PlaybackEngine: ObservableObject {
 
                 if let duration = player.currentItem?.duration.seconds,
                    duration.isFinite,
-                   duration > 0 {
+                   duration > 0,
+                   self.playbackDuration != duration {
                     self.playbackDuration = duration
                 }
 
@@ -324,6 +326,7 @@ final class PlaybackEngine: ObservableObject {
     private func transitionPlaybackState(to newState: PlaybackState) {
         guard playbackState != newState else { return }
         playbackState = newState
+        delegate?.playbackEngine(self, didTransitionTo: newState)
     }
 
     private func invalidatePendingSeek() {

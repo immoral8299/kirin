@@ -1,13 +1,18 @@
 import SwiftUI
 
 struct PlayQueueView: View {
-    @ObservedObject var appState: AppState
+    @ObservedObject var queueManager: QueueManager
+    let onRefresh: () -> Void
+    let onSelectTrack: (String) -> Void
+    let onRemoveTrack: (String) -> Void
+    let onMoveTrack: (String, String) -> Void
+    let onClearUpcomingTracks: () -> Void
     @State private var showsPlayedTracks = false
 
     var body: some View {
         let currentTrackIndex = currentTrackIndex
         let tracks = displayedTracks(currentTrackIndex: currentTrackIndex)
-        let hasUpcomingTracks = currentTrackIndex >= 0 && currentTrackIndex < appState.visiblePlayQueue.count - 1
+        let hasUpcomingTracks = currentTrackIndex >= 0 && currentTrackIndex < queueManager.visiblePlayQueue.count - 1
 
         VStack(alignment: .leading, spacing: 10) {
             HStack {
@@ -16,13 +21,13 @@ struct PlayQueueView: View {
 
                 Spacer()
 
-                if appState.isQueueOperationInProgress {
+                if queueManager.isQueueOperationInProgress {
                     ProgressView()
                         .controlSize(.small)
                 }
 
                 Button {
-                    appState.refreshPlayQueue()
+                    onRefresh()
                 } label: {
                     Image(systemName: "arrow.clockwise")
                         .padding(6)
@@ -31,12 +36,12 @@ struct PlayQueueView: View {
                 .buttonStyle(.plain)
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(AppTheme.accent)
-                .disabled(!appState.hasEditablePlayQueue || appState.isQueueOperationInProgress)
-                .interactiveCursor(disabled: !appState.hasEditablePlayQueue || appState.isQueueOperationInProgress)
+                .disabled(!queueManager.hasEditablePlayQueue || queueManager.isQueueOperationInProgress)
+                .interactiveCursor(disabled: !queueManager.hasEditablePlayQueue || queueManager.isQueueOperationInProgress)
                 .help("Refresh Play Queue")
 
                 Button {
-                    appState.clearUpcomingPlayQueueTracks()
+                    onClearUpcomingTracks()
                 } label: {
                     Image(systemName: "trash")
                         .padding(6)
@@ -45,8 +50,8 @@ struct PlayQueueView: View {
                 .buttonStyle(.plain)
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(.red.opacity(0.9))
-                .disabled(!hasUpcomingTracks || appState.isQueueOperationInProgress)
-                .interactiveCursor(disabled: !hasUpcomingTracks || appState.isQueueOperationInProgress)
+                .disabled(!hasUpcomingTracks || queueManager.isQueueOperationInProgress)
+                .interactiveCursor(disabled: !hasUpcomingTracks || queueManager.isQueueOperationInProgress)
                 .help("Clear Upcoming Tracks")
             }
 
@@ -87,7 +92,7 @@ struct PlayQueueView: View {
     }
 
     private func queueRow(_ track: PlexTrack, isUpcoming: Bool) -> some View {
-        let isCurrent = track.id == appState.currentPlayQueueTrackID
+        let isCurrent = track.id == queueManager.currentPlayQueueTrackID
 
         return HStack(spacing: 8) {
             Image(systemName: isCurrent ? "speaker.wave.2.fill" : "line.3.horizontal")
@@ -96,7 +101,7 @@ struct PlayQueueView: View {
                 .frame(width: 16)
 
             Button {
-                appState.selectPlayQueueTrack(id: track.id)
+                onSelectTrack(track.id)
             } label: {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(track.title)
@@ -111,18 +116,18 @@ struct PlayQueueView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .disabled(appState.isQueueOperationInProgress)
+            .disabled(queueManager.isQueueOperationInProgress)
 
             if isUpcoming {
                 Button {
-                    appState.removePlayQueueTrack(id: track.id)
+                    onRemoveTrack(track.id)
                 } label: {
                     Image(systemName: "trash")
                         .font(.system(size: 11))
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.red.opacity(0.85))
-                .disabled(appState.isQueueOperationInProgress)
+                .disabled(queueManager.isQueueOperationInProgress)
                 .help("Remove Track from Play Queue")
             }
         }
@@ -132,21 +137,21 @@ struct PlayQueueView: View {
         .draggable(track.id)
         .dropDestination(for: String.self) { ids, _ in
             guard let sourceID = ids.first else { return false }
-            appState.movePlayQueueTrack(id: sourceID, before: track.id)
+            onMoveTrack(sourceID, track.id)
             return true
         }
     }
 
     private var currentTrackIndex: Int {
-        appState.visiblePlayQueue.firstIndex(where: { $0.id == appState.currentPlayQueueTrackID }) ?? -1
+        queueManager.visiblePlayQueue.firstIndex(where: { $0.id == queueManager.currentPlayQueueTrackID }) ?? -1
     }
 
     private func displayedTracks(currentTrackIndex: Int) -> [PlexTrack] {
         guard currentTrackIndex >= 0, !showsPlayedTracks else {
-            return appState.visiblePlayQueue
+            return queueManager.visiblePlayQueue
         }
 
-        return Array(appState.visiblePlayQueue.dropFirst(currentTrackIndex))
+        return Array(queueManager.visiblePlayQueue.dropFirst(currentTrackIndex))
     }
 
     private func isUpcomingTrack(at displayedTrackIndex: Int, currentTrackIndex: Int) -> Bool {

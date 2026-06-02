@@ -1,7 +1,15 @@
 import SwiftUI
 
 struct SettingsView: View {
-    @ObservedObject var appState: AppState
+    @ObservedObject var authService: PlexAuthService
+    @ObservedObject var settingsStore: SettingsStore
+    @ObservedObject var libraryStore: LibraryStore
+    let onSelectServer: (String) -> Void
+    let onSelectLibrary: (String) -> Void
+    let onRefreshServersAndLibraries: () -> Void
+    let onSetLoudnessLevelingEnabled: (Bool) -> Void
+    let onSetListenedThresholdPercentage: (Int) -> Void
+    let onSignOut: () -> Void
 
     var body: some View {
         VStack(spacing: 12) {
@@ -9,11 +17,11 @@ struct SettingsView: View {
 
             VStack(alignment: .leading, spacing: 16) {
                 settingsSection("Library") {
-                    pickerRow("Server", selection: serverSelectionBinding, items: appState.availableServers.map { ($0.name, Optional($0.id)) })
-                        .disabled(appState.availableServers.isEmpty)
+                    pickerRow("Server", selection: serverSelectionBinding, items: libraryStore.availableServers.map { ($0.name, Optional($0.id)) })
+                        .disabled(libraryStore.availableServers.isEmpty)
                     dividerRow
-                    pickerRow("Music Library", selection: librarySelectionBinding, items: appState.availableLibraries.map { ($0.title, Optional($0.id)) })
-                        .disabled(appState.availableLibraries.isEmpty)
+                    pickerRow("Music Library", selection: librarySelectionBinding, items: libraryStore.availableLibraries.map { ($0.title, Optional($0.id)) })
+                        .disabled(libraryStore.availableLibraries.isEmpty)
                 }
 
                 settingsSection("Menu Bar Format") {
@@ -43,7 +51,7 @@ struct SettingsView: View {
                 }
 
                 Button {
-                    appState.signOut()
+                    onSignOut()
                 } label: {
                     Label("Log Out", systemImage: "rectangle.portrait.and.arrow.right")
                         .font(.system(size: 11, weight: .semibold, design: .rounded))
@@ -81,7 +89,7 @@ struct SettingsView: View {
             Spacer()
 
             Button {
-                appState.refreshLibraryContent()
+                onRefreshServersAndLibraries()
             } label: {
                 Image(systemName: "arrow.clockwise")
                     .padding(6)
@@ -90,102 +98,102 @@ struct SettingsView: View {
             .buttonStyle(.plain)
             .focusable(false)
             .font(.system(size: 12, weight: .semibold))
-            .interactiveCursor(disabled: !appState.isAuthenticated)
+            .interactiveCursor(disabled: authService.authToken == nil)
             .foregroundStyle(AppTheme.accent)
-            .disabled(!appState.isAuthenticated)
-            .help("Refresh Library Content")
+            .disabled(authService.authToken == nil)
+            .help("Refresh Servers and Libraries")
         }
     }
 
     private var serverSelectionBinding: Binding<String?> {
         Binding {
-            appState.selectedServerID
+            settingsStore.settings.selectedServerID
         } set: { newValue in
             if let newValue {
-                appState.selectServer(id: newValue)
+                onSelectServer(newValue)
             }
         }
     }
 
     private var librarySelectionBinding: Binding<String?> {
         Binding {
-            appState.selectedLibraryID
+            settingsStore.settings.selectedLibraryID
         } set: { newValue in
             if let newValue {
-                appState.selectLibrary(id: newValue)
+                onSelectLibrary(newValue)
             }
         }
     }
 
     private var firstFieldBinding: Binding<MenuBarField> {
         Binding {
-            appState.settingsStore.settings.menuBarFormat.firstField
+            settingsStore.settings.menuBarFormat.firstField
         } set: { newValue in
-            appState.settingsStore.settings.menuBarFormat.firstField = newValue
+            settingsStore.settings.menuBarFormat.firstField = newValue
         }
     }
 
     private var secondFieldBinding: Binding<MenuBarField> {
         Binding {
-            appState.settingsStore.settings.menuBarFormat.secondField
+            settingsStore.settings.menuBarFormat.secondField
         } set: { newValue in
-            appState.settingsStore.settings.menuBarFormat.secondField = newValue
+            settingsStore.settings.menuBarFormat.secondField = newValue
         }
     }
 
     private var showRecentlyPlayedBinding: Binding<Bool> {
         Binding {
-            appState.settingsStore.settings.sectionVisibility.showRecentlyPlayedAlbums
+            settingsStore.settings.sectionVisibility.showRecentlyPlayedAlbums
         } set: { newValue in
-            appState.settingsStore.settings.sectionVisibility.showRecentlyPlayedAlbums = newValue
+            settingsStore.settings.sectionVisibility.showRecentlyPlayedAlbums = newValue
         }
     }
 
     private var showRecentlyAddedBinding: Binding<Bool> {
         Binding {
-            appState.settingsStore.settings.sectionVisibility.showRecentlyAddedAlbums
+            settingsStore.settings.sectionVisibility.showRecentlyAddedAlbums
         } set: { newValue in
-            appState.settingsStore.settings.sectionVisibility.showRecentlyAddedAlbums = newValue
+            settingsStore.settings.sectionVisibility.showRecentlyAddedAlbums = newValue
         }
     }
 
     private var showPlaylistsBinding: Binding<Bool> {
         Binding {
-            appState.settingsStore.settings.sectionVisibility.showPlaylists
+            settingsStore.settings.sectionVisibility.showPlaylists
         } set: { newValue in
-            appState.settingsStore.settings.sectionVisibility.showPlaylists = newValue
+            settingsStore.settings.sectionVisibility.showPlaylists = newValue
         }
     }
 
     private var showStationsBinding: Binding<Bool> {
         Binding {
-            appState.settingsStore.settings.sectionVisibility.showStations
+            settingsStore.settings.sectionVisibility.showStations
         } set: { newValue in
-            appState.settingsStore.settings.sectionVisibility.showStations = newValue
+            settingsStore.settings.sectionVisibility.showStations = newValue
         }
     }
 
     private var loudnessLevelingBinding: Binding<Bool> {
         Binding {
-            appState.isLoudnessLevelingEnabled
+            settingsStore.settings.loudnessLevelingEnabled
         } set: { newValue in
-            appState.setLoudnessLevelingEnabled(newValue)
+            onSetLoudnessLevelingEnabled(newValue)
         }
     }
 
     private var listenedThresholdBinding: Binding<Int> {
         Binding {
-            appState.listenedThresholdPercentage
+            settingsStore.settings.listenedThresholdPercentage
         } set: { newValue in
-            appState.setListenedThresholdPercentage(newValue)
+            onSetListenedThresholdPercentage(newValue)
         }
     }
 
     private var themePreferenceBinding: Binding<AppThemePreference> {
         Binding {
-            appState.themePreference
+            settingsStore.settings.themePreference
         } set: { newValue in
-            appState.setThemePreference(newValue)
+            settingsStore.settings.themePreference = newValue
         }
     }
 

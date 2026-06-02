@@ -162,7 +162,12 @@ final class StatusItemController: NSObject {
     }
 
     private func bind(appState: AppState) {
-        appState.objectWillChange
+        Publishers.MergeMany(
+            appState.authService.objectWillChange.eraseToAnyPublisher(),
+            appState.settingsStore.objectWillChange.eraseToAnyPublisher(),
+            appState.libraryStore.objectWillChange.eraseToAnyPublisher(),
+            appState.playbackEngine.objectWillChange.eraseToAnyPublisher()
+        )
             .sink { [weak self, weak appState] _ in
                 guard let self, let appState else { return }
                 Task { @MainActor in
@@ -170,7 +175,6 @@ final class StatusItemController: NSObject {
                         self.isSettingsTabSelected = false
                     }
                     self.applyThemePreference(appState.themePreference)
-                    self.rootView.rootView = self.makeRootView(appState: appState)
                     self.updateStatus(iconName: appState.statusIconName, text: appState.statusLine)
                 }
             }

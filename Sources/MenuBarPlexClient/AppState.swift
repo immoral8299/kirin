@@ -1,9 +1,8 @@
 import AVFoundation
-import Combine
 import Foundation
 
 @MainActor
-final class AppState: ObservableObject {
+final class AppState {
     let settingsStore = SettingsStore()
     let authService: PlexAuthService
 
@@ -14,7 +13,6 @@ final class AppState: ObservableObject {
 
     private let context: StoreContext
     private let apiClient: PlexService
-    private var cancellables = Set<AnyCancellable>()
 
     // MARK: - Forwarded computed properties
 
@@ -55,8 +53,6 @@ final class AppState: ObservableObject {
         context.timelineTracker = timelineTracker
 
         playbackEngine.delegate = self
-
-        bindChildObjects()
 
         if authService.authToken != nil {
             Task {
@@ -191,8 +187,12 @@ final class AppState: ObservableObject {
         libraryStore.selectLibrary(id: id)
     }
 
-    func refreshLibraryContent() {
-        libraryStore.refreshLibraryContent()
+    func refreshCurrentLibraryContent() {
+        libraryStore.refreshCurrentLibraryContent()
+    }
+
+    func refreshServersAndLibraries() {
+        libraryStore.refreshServersAndLibraries()
     }
 
     func dismissLibraryLoadError() {
@@ -285,29 +285,6 @@ final class AppState: ObservableObject {
         queueManager.clearUpcomingPlayQueueTracks()
     }
 
-    // MARK: - Private
-
-    private func bindChildObjects() {
-        authService.objectWillChange
-            .sink { [weak self] _ in self?.objectWillChange.send() }
-            .store(in: &cancellables)
-
-        settingsStore.objectWillChange
-            .sink { [weak self] _ in self?.objectWillChange.send() }
-            .store(in: &cancellables)
-
-        libraryStore.objectWillChange
-            .sink { [weak self] _ in self?.objectWillChange.send() }
-            .store(in: &cancellables)
-
-        playbackEngine.objectWillChange
-            .sink { [weak self] _ in self?.objectWillChange.send() }
-            .store(in: &cancellables)
-
-        queueManager.objectWillChange
-            .sink { [weak self] _ in self?.objectWillChange.send() }
-            .store(in: &cancellables)
-    }
 }
 
 // MARK: - PlaybackEngineDelegate
@@ -320,7 +297,10 @@ extension AppState: PlaybackEngineDelegate {
     }
 
     func playbackEngine(_ engine: PlaybackEngine, didUpdatePosition position: Double, duration: Double) {
-        timelineTracker.reportTrackedPlaybackTimelineIfNeeded()
         timelineTracker.markTrackedTrackListenedIfNeeded()
+    }
+
+    func playbackEngine(_ engine: PlaybackEngine, didTransitionTo state: PlaybackState) {
+        timelineTracker.playbackStateDidChange(to: state)
     }
 }

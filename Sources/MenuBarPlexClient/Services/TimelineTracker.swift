@@ -5,8 +5,8 @@ final class TimelineTracker {
     private let context: StoreContext
     private var trackedTrack: PlexTrack?
     private var hasMarkedTrackedTrackListened = false
-    private var lastTimelineReportDate: Date?
-    private var timelineReportTask: Task<Void, Never>?
+    private var periodicReportingTask: Task<Void, Never>?
+    private var timelineRequestTask: Task<Void, Never>?
     private let timelineReportInterval: TimeInterval = 10
 
     var listenedThresholdPercentage: Int {
@@ -27,30 +27,42 @@ final class TimelineTracker {
         stopTrackingCurrentTrack()
         trackedTrack = track
         hasMarkedTrackedTrackListened = false
-        lastTimelineReportDate = nil
+        periodicReportingTask?.cancel()
+        periodicReportingTask = nil
     }
 
     func stopTrackingCurrentTrack() {
         guard trackedTrack != nil else { return }
         reportTrackedPlaybackTimeline(state: .stopped)
+        periodicReportingTask?.cancel()
+        periodicReportingTask = nil
         trackedTrack = nil
         hasMarkedTrackedTrackListened = false
-        lastTimelineReportDate = nil
     }
 
     func stopTracking() {
         stopTrackingCurrentTrack()
     }
 
-    func reportTrackedPlaybackTimelineIfNeeded() {
-        guard context.playbackEngine?.playbackState == .playing else { return }
+    func playbackStateDidChange(to state: PlaybackState) {
+        periodicReportingTask?.cancel()
+        periodicReportingTask = nil
 
-        if let lastTimelineReportDate,
-           Date().timeIntervalSince(lastTimelineReportDate) < timelineReportInterval {
+        guard state == .playing else {
+            if state == .paused || state == .stopped {
+                reportTrackedPlaybackTimeline(state: state)
+            }
             return
         }
 
         reportTrackedPlaybackTimeline(state: .playing)
+        periodicReportingTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(self?.timelineReportInterval ?? 10))
+                guard !Task.isCancelled else { return }
+                self?.reportTrackedPlaybackTimeline(state: .playing)
+            }
+        }
     }
 
     func reportTrackedPlaybackTimeline(state: PlaybackState) {
@@ -63,11 +75,9 @@ final class TimelineTracker {
 
         let positionMilliseconds = Int(((context.playbackEngine?.playbackPosition ?? 0) * 1_000).rounded())
         let durationMilliseconds = resolvedDurationMilliseconds(for: track)
-        lastTimelineReportDate = Date()
-
-        let previousTimelineReportTask = timelineReportTask
-        timelineReportTask = Task {
-            await previousTimelineReportTask?.value
+        let previousTimelineRequestTask = timelineRequestTask
+        timelineRequestTask = Task {
+            await previousTimelineRequestTask?.value
 
             do {
                 try await context.plexService.reportPlaybackTimeline(

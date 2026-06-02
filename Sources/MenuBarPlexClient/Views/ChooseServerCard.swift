@@ -1,7 +1,9 @@
 import SwiftUI
 
 struct ChooseServerCard: View {
-    @ObservedObject var appState: AppState
+    @ObservedObject var authService: PlexAuthService
+    @ObservedObject var libraryStore: LibraryStore
+    let onSelectServer: (String) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -13,9 +15,9 @@ struct ChooseServerCard: View {
                 .foregroundStyle(.secondary.opacity(0.76))
 
             VStack(spacing: 8) {
-                ForEach(appState.availableServers) { server in
+                ForEach(libraryStore.availableServers) { server in
                     Button {
-                        appState.selectServer(id: server.id)
+                        onSelectServer(server.id)
                     } label: {
                         HStack(spacing: 10) {
                             Image(systemName: "externaldrive")
@@ -34,12 +36,12 @@ struct ChooseServerCard: View {
                     }
                     .buttonStyle(.plain)
                     .focusable(false)
-                    .interactiveCursor(disabled: appState.isLoadingLibrary)
-                    .disabled(appState.isLoadingLibrary)
+                    .interactiveCursor(disabled: libraryStore.isLoadingLibrary)
+                    .disabled(libraryStore.isLoadingLibrary)
                 }
             }
 
-            if let error = appState.libraryLoadError {
+            if let error = libraryStore.libraryLoadError {
                 Text(error)
                     .font(.system(size: 11, weight: .medium, design: .rounded))
                     .foregroundStyle(.secondary.opacity(0.72))
@@ -51,7 +53,9 @@ struct ChooseServerCard: View {
     }
 
     private var greetingTitle: String {
-        if let username = appState.authenticatedUsername {
+        if case let .authenticated(username) = authService.status.state {
+            let username = username.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !username.isEmpty else { return "Welcome to PlexTray" }
             return "Welcome, \(username)"
         }
 

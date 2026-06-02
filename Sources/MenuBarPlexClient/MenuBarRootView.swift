@@ -14,10 +14,20 @@ private enum ContentTab {
 }
 
 struct MenuBarRootView: View {
-    @ObservedObject var appState: AppState
+    let appState: AppState
     let onClose: () -> Void
     let onTabChange: (Bool) -> Void
+    @ObservedObject private var authService: PlexAuthService
+    @ObservedObject private var settingsStore: SettingsStore
     @State private var selectedTab: ContentTab = .home
+
+    init(appState: AppState, onClose: @escaping () -> Void, onTabChange: @escaping (Bool) -> Void) {
+        self.appState = appState
+        self.onClose = onClose
+        self.onTabChange = onTabChange
+        _authService = ObservedObject(wrappedValue: appState.authService)
+        _settingsStore = ObservedObject(wrappedValue: appState.settingsStore)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -46,119 +56,20 @@ struct MenuBarRootView: View {
             )
         )
         .foregroundStyle(.primary)
-        .preferredColorScheme(appState.themePreference.colorScheme)
+        .preferredColorScheme(settingsStore.settings.themePreference.colorScheme)
     }
 
     @ViewBuilder
     private var scrollableContent: some View {
-        if appState.isAuthenticated {
-            if appState.shouldPromptForServerSelection {
-                ChooseServerCard(appState: appState)
-            } else {
-                activeLibraryBanner
-                connectionBanner
-
-                NowPlayingCard(
-                    metadata: appState.nowPlaying,
-                    playbackState: appState.playbackState,
-                    playbackProgress: appState.playbackProgress,
-                    playbackPosition: appState.playbackPosition,
-                    playbackDuration: appState.playbackDuration,
-                    isShuffleEnabled: appState.isShuffleEnabled,
-                    onPlayPause: appState.togglePlayback,
-                    onNext: appState.nextTrack,
-                    onPrevious: appState.previousTrack,
-                    onSeek: appState.seekToProgress,
-                    onToggleShuffle: appState.toggleShuffle
-                )
-            }
-
-            switch selectedTab {
-            case .settings:
-                SettingsView(appState: appState)
-                    .frame(width: MenuBarLayout.contentWidth, alignment: .leading)
-                    .background(AppTheme.panelFillSoft, in: RoundedRectangle(cornerRadius: AppCornerRadius.medium, style: .continuous))
-            case .queue:
-                if !appState.shouldPromptForServerSelection {
-                    if !appState.relatedAlbums.isEmpty {
-                        RelatedAlbumsSection(
-                            albums: appState.relatedAlbums,
-                            onSelect: appState.playAlbum,
-                            onPlayNext: { appState.enqueueAlbum($0, playNext: true) },
-                            onAddToQueue: { appState.enqueueAlbum($0, playNext: false) }
-                        )
-                    }
-                    PlayQueueView(appState: appState)
-                }
-            case .home:
-                if !appState.shouldPromptForServerSelection {
-                    homeContent
-                }
-            }
+        if authService.authToken != nil {
+            AuthenticatedContent(appState: appState, selectedTab: selectedTab)
         } else {
             LoginPromptCard(
-                authState: appState.authService.status.state,
+                authState: authService.status.state,
                 onConnect: appState.beginPlexLogin,
-                onOpenBrowser: appState.authService.reopenBrowser
+                onOpenBrowser: authService.reopenBrowser
             )
         }
-    }
-
-    @ViewBuilder
-    private var homeContent: some View {
-                let visibility = appState.settingsStore.settings.sectionVisibility
-
-                if visibility.showRecentlyPlayedAlbums && !appState.recentlyPlayedAlbums.isEmpty {
-                    AlbumCarouselSection(
-                        title: "Recently Played",
-                        items: appState.recentlyPlayedAlbums,
-                        pageSize: 4,
-                        onSelect: appState.playAlbum,
-                        onPlayNext: { appState.enqueueAlbum($0, playNext: true) },
-                        onAddToQueue: { appState.enqueueAlbum($0, playNext: false) }
-                    )
-                }
-
-                if visibility.showRecentlyAddedAlbums && !appState.recentlyAddedAlbums.isEmpty {
-                    AlbumCarouselSection(
-                        title: "Recently Added",
-                        items: appState.recentlyAddedAlbums,
-                        pageSize: 4,
-                        onSelect: appState.playAlbum,
-                        onPlayNext: { appState.enqueueAlbum($0, playNext: true) },
-                        onAddToQueue: { appState.enqueueAlbum($0, playNext: false) }
-                    )
-                }
-
-                if visibility.showPlaylists && !appState.playlists.isEmpty {
-                    PlaylistCarouselSection(
-                        title: "Playlists",
-                        items: appState.playlists,
-                        pageSize: 4,
-                        onSelect: appState.playPlaylist,
-                        onPlayNext: { appState.enqueuePlaylist($0, playNext: true) },
-                        onAddToQueue: { appState.enqueuePlaylist($0, playNext: false) }
-                    )
-                }
-
-                if visibility.showStations && !appState.stations.isEmpty {
-                    StationCarouselSection(
-                        title: "Stations",
-                        items: appState.stations,
-                        pageSize: 4,
-                        onSelect: appState.playStation,
-                        onPlayNext: { appState.enqueueStation($0, playNext: true) },
-                        onAddToQueue: { appState.enqueueStation($0, playNext: false) }
-                    )
-                }
-
-                if !appState.isLoadingLibrary,
-                   appState.recentlyPlayedAlbums.isEmpty,
-                   appState.recentlyAddedAlbums.isEmpty,
-                   appState.playlists.isEmpty,
-                   appState.stations.isEmpty {
-                    EmptyLibraryCard()
-                }
     }
 
     private var topBar: some View {
@@ -181,7 +92,7 @@ struct MenuBarRootView: View {
 
             authButton
 
-            if appState.isAuthenticated {
+            if authService.authToken != nil {
                 tabButton(.home, icon: "house", tooltip: "Home")
                 tabButton(.queue, icon: "list.bullet", tooltip: "Play Queue")
                 tabButton(.settings, icon: "gearshape", tooltip: "Settings")
@@ -220,9 +131,69 @@ struct MenuBarRootView: View {
     }
 
     @ViewBuilder
+    private var authButton: some View {
+        switch authService.status.state {
+        case .authenticated:
+            EmptyView()
+        case .requestingPin, .waitingForBrowserLogin:
+            ProgressView()
+                .controlSize(.small)
+        default:
+            EmptyView()
+        }
+    }
+}
+
+private struct AuthenticatedContent: View {
+    let appState: AppState
+    let selectedTab: ContentTab
+    @ObservedObject private var libraryStore: LibraryStore
+
+    init(appState: AppState, selectedTab: ContentTab) {
+        self.appState = appState
+        self.selectedTab = selectedTab
+        _libraryStore = ObservedObject(wrappedValue: appState.libraryStore)
+    }
+
+    var body: some View {
+        if libraryStore.shouldPromptForServerSelection {
+            ChooseServerCard(
+                authService: appState.authService,
+                libraryStore: libraryStore,
+                onSelectServer: appState.selectServer
+            )
+        } else {
+            activeLibraryBanner
+            connectionBanner
+            PlaybackSection(appState: appState)
+
+            switch selectedTab {
+            case .settings:
+                SettingsView(
+                    authService: appState.authService,
+                    settingsStore: appState.settingsStore,
+                    libraryStore: libraryStore,
+                    onSelectServer: appState.selectServer,
+                    onSelectLibrary: appState.selectLibrary,
+                    onRefreshServersAndLibraries: appState.refreshServersAndLibraries,
+                    onSetLoudnessLevelingEnabled: appState.setLoudnessLevelingEnabled,
+                    onSetListenedThresholdPercentage: appState.setListenedThresholdPercentage,
+                    onSignOut: appState.signOut
+                )
+                .frame(width: MenuBarLayout.contentWidth, alignment: .leading)
+                .background(AppTheme.panelFillSoft, in: RoundedRectangle(cornerRadius: AppCornerRadius.medium, style: .continuous))
+            case .queue:
+                QueueContent(appState: appState)
+            case .home:
+                HomeContent(appState: appState)
+            }
+        }
+    }
+
+    @ViewBuilder
     private var activeLibraryBanner: some View {
-        if let serverName = appState.selectedServerName,
-           let libraryTitle = appState.selectedLibraryTitle {
+        if let serverName = libraryStore.selectedServerName,
+           let libraryTitle = libraryStore.selectedLibraryTitle {
             HStack(spacing: 8) {
                 Image(systemName: "externaldrive.connected.to.line.below")
                     .foregroundStyle(AppTheme.accent)
@@ -230,20 +201,15 @@ struct MenuBarRootView: View {
                     .font(.system(size: 11, weight: .semibold, design: .rounded))
                     .lineLimit(1)
                     .truncationMode(.middle)
-
                 Spacer()
-
-                if appState.isLoadingLibrary, appState.hasExistingContent {
+                if libraryStore.isLoadingLibrary, libraryStore.hasExistingContent {
                     ProgressView()
                         .controlSize(.small)
                     Text("Refreshing...")
                         .font(.system(size: 10, weight: .medium, design: .rounded))
                         .foregroundStyle(.secondary.opacity(0.68))
                 }
-
-                Button {
-                    appState.refreshLibraryContent()
-                } label: {
+                Button(action: appState.refreshCurrentLibraryContent) {
                     Image(systemName: "arrow.clockwise.circle")
                         .foregroundStyle(.green)
                         .padding(4)
@@ -261,7 +227,7 @@ struct MenuBarRootView: View {
 
     @ViewBuilder
     private var connectionBanner: some View {
-        if appState.isLoadingLibrary, !appState.hasExistingContent {
+        if libraryStore.isLoadingLibrary, !libraryStore.hasExistingContent {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 8) {
                     ProgressView()
@@ -269,8 +235,7 @@ struct MenuBarRootView: View {
                     Text("Loading Plex library...")
                         .font(.system(size: 11, weight: .medium, design: .rounded))
                 }
-
-                if let loadingTargetDescription = appState.loadingTargetDescription {
+                if let loadingTargetDescription = libraryStore.loadingTargetDescription {
                     Text(loadingTargetDescription)
                         .font(.system(size: 10, weight: .medium, design: .rounded))
                         .foregroundStyle(.secondary.opacity(0.68))
@@ -281,46 +246,121 @@ struct MenuBarRootView: View {
             .padding(8)
             .frame(width: MenuBarLayout.contentWidth, alignment: .leading)
             .background(AppTheme.overlaySoft, in: RoundedRectangle(cornerRadius: AppCornerRadius.small, style: .continuous))
-        } else if let error = appState.libraryLoadError {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 8) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.yellow)
-                    Text(error)
-                        .font(.system(size: 11, weight: .medium, design: .rounded))
-                        .lineLimit(2)
-                    Spacer()
-                    Button {
-                        appState.dismissLibraryLoadError()
-                    } label: {
-                        Image(systemName: "xmark")
-                            .padding(4)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .focusable(false)
-                    .interactiveCursor()
-                    .foregroundStyle(.secondary.opacity(0.72))
+        } else if let error = libraryStore.libraryLoadError {
+            HStack(spacing: 8) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.yellow)
+                Text(error)
+                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                    .lineLimit(2)
+                Spacer()
+                Button(action: appState.dismissLibraryLoadError) {
+                    Image(systemName: "xmark")
+                        .padding(4)
+                        .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
+                .focusable(false)
+                .interactiveCursor()
+                .foregroundStyle(.secondary.opacity(0.72))
             }
             .padding(8)
             .frame(width: MenuBarLayout.contentWidth, alignment: .leading)
             .background(AppTheme.overlayStrong, in: RoundedRectangle(cornerRadius: AppCornerRadius.compact, style: .continuous))
         }
     }
+}
 
-    @ViewBuilder
-    private var authButton: some View {
-        switch appState.authService.status.state {
-        case .authenticated:
-            EmptyView()
-        case .requestingPin, .waitingForBrowserLogin:
-            ProgressView()
-                .controlSize(.small)
-        default:
-            EmptyView()
+private struct PlaybackSection: View {
+    let appState: AppState
+    @ObservedObject private var playbackEngine: PlaybackEngine
+    @ObservedObject private var queueManager: QueueManager
+
+    init(appState: AppState) {
+        self.appState = appState
+        _playbackEngine = ObservedObject(wrappedValue: appState.playbackEngine)
+        _queueManager = ObservedObject(wrappedValue: appState.queueManager)
+    }
+
+    var body: some View {
+        NowPlayingCard(
+            metadata: playbackEngine.nowPlaying,
+            playbackState: playbackEngine.playbackState,
+            playbackProgress: playbackEngine.playbackProgress,
+            playbackPosition: playbackEngine.playbackPosition,
+            playbackDuration: playbackEngine.playbackDuration,
+            isShuffleEnabled: queueManager.isShuffleEnabled,
+            onPlayPause: appState.togglePlayback,
+            onNext: appState.nextTrack,
+            onPrevious: appState.previousTrack,
+            onSeek: appState.seekToProgress,
+            onToggleShuffle: appState.toggleShuffle
+        )
+        .equatable()
+    }
+}
+
+private struct HomeContent: View {
+    let appState: AppState
+    @ObservedObject private var libraryStore: LibraryStore
+    @ObservedObject private var settingsStore: SettingsStore
+
+    init(appState: AppState) {
+        self.appState = appState
+        _libraryStore = ObservedObject(wrappedValue: appState.libraryStore)
+        _settingsStore = ObservedObject(wrappedValue: appState.settingsStore)
+    }
+
+    var body: some View {
+        let visibility = settingsStore.settings.sectionVisibility
+
+        if visibility.showRecentlyPlayedAlbums && !libraryStore.recentlyPlayedAlbums.isEmpty {
+            AlbumCarouselSection(title: "Recently Played", items: libraryStore.recentlyPlayedAlbums, pageSize: 4, onSelect: appState.playAlbum, onPlayNext: { appState.enqueueAlbum($0, playNext: true) }, onAddToQueue: { appState.enqueueAlbum($0, playNext: false) })
+        }
+        if visibility.showRecentlyAddedAlbums && !libraryStore.recentlyAddedAlbums.isEmpty {
+            AlbumCarouselSection(title: "Recently Added", items: libraryStore.recentlyAddedAlbums, pageSize: 4, onSelect: appState.playAlbum, onPlayNext: { appState.enqueueAlbum($0, playNext: true) }, onAddToQueue: { appState.enqueueAlbum($0, playNext: false) })
+        }
+        if visibility.showPlaylists && !libraryStore.playlists.isEmpty {
+            PlaylistCarouselSection(title: "Playlists", items: libraryStore.playlists, pageSize: 4, onSelect: appState.playPlaylist, onPlayNext: { appState.enqueuePlaylist($0, playNext: true) }, onAddToQueue: { appState.enqueuePlaylist($0, playNext: false) })
+        }
+        if visibility.showStations && !libraryStore.stations.isEmpty {
+            StationCarouselSection(title: "Stations", items: libraryStore.stations, pageSize: 4, onSelect: appState.playStation, onPlayNext: { appState.enqueueStation($0, playNext: true) }, onAddToQueue: { appState.enqueueStation($0, playNext: false) })
+        }
+        if !libraryStore.isLoadingLibrary,
+           libraryStore.recentlyPlayedAlbums.isEmpty,
+           libraryStore.recentlyAddedAlbums.isEmpty,
+           libraryStore.playlists.isEmpty,
+           libraryStore.stations.isEmpty {
+            EmptyLibraryCard()
         }
     }
 }
 
+private struct QueueContent: View {
+    let appState: AppState
+    @ObservedObject private var libraryStore: LibraryStore
 
+    init(appState: AppState) {
+        self.appState = appState
+        _libraryStore = ObservedObject(wrappedValue: appState.libraryStore)
+    }
+
+    var body: some View {
+        if !libraryStore.relatedAlbums.isEmpty {
+            RelatedAlbumsSection(
+                albums: libraryStore.relatedAlbums,
+                onSelect: appState.playAlbum,
+                onPlayNext: { appState.enqueueAlbum($0, playNext: true) },
+                onAddToQueue: { appState.enqueueAlbum($0, playNext: false) }
+            )
+        }
+        PlayQueueView(
+            queueManager: appState.queueManager,
+            onRefresh: appState.refreshPlayQueue,
+            onSelectTrack: appState.selectPlayQueueTrack,
+            onRemoveTrack: appState.removePlayQueueTrack,
+            onMoveTrack: appState.movePlayQueueTrack,
+            onClearUpcomingTracks: appState.clearUpcomingPlayQueueTracks
+        )
+    }
+}

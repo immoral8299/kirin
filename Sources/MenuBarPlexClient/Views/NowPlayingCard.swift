@@ -1,6 +1,6 @@
 import SwiftUI
 
-struct NowPlayingCard: View {
+struct NowPlayingCard: View, Equatable {
     let metadata: TrackMetadata
     let playbackState: PlaybackState
     let playbackProgress: Double
@@ -14,6 +14,15 @@ struct NowPlayingCard: View {
     let onToggleShuffle: () -> Void
     @State private var sliderValue: Double = 0
     @State private var isSeeking = false
+
+    nonisolated static func == (lhs: NowPlayingCard, rhs: NowPlayingCard) -> Bool {
+        lhs.metadata == rhs.metadata &&
+            lhs.playbackState == rhs.playbackState &&
+            lhs.playbackProgress == rhs.playbackProgress &&
+            lhs.playbackPosition == rhs.playbackPosition &&
+            lhs.playbackDuration == rhs.playbackDuration &&
+            lhs.isShuffleEnabled == rhs.isShuffleEnabled
+    }
 
     var body: some View {
         VStack(spacing: 10) {
