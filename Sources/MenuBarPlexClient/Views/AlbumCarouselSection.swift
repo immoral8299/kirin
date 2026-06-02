@@ -20,8 +20,9 @@ struct AlbumCarouselSection: View {
                             } label: {
                                 VStack(alignment: .leading, spacing: 6) {
                                     ArtworkImage(url: album.artworkURL, placeholderSystemImage: "music.note")
-                                    .frame(width: 100, height: 100)
-                                    .clipShape(RoundedRectangle(cornerRadius: AppCornerRadius.small, style: .continuous))
+                                        .id(album.id)
+                                        .frame(width: 100, height: 100)
+                                        .clipShape(RoundedRectangle(cornerRadius: AppCornerRadius.small, style: .continuous))
 
                                     Text(album.title)
                                         .font(.system(size: 12, weight: .semibold, design: .rounded))
