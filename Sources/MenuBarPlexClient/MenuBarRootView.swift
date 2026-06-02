@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 private enum MenuBarLayout {
@@ -8,84 +9,25 @@ private enum MenuBarLayout {
 
 struct MenuBarRootView: View {
     @ObservedObject var appState: AppState
+    let onClose: () -> Void
     @State private var showingSettings = false
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 14) {
-                topBar
+        VStack(spacing: 0) {
+            topBar
+                .padding(.horizontal, 14)
+                .padding(.top, 12)
+                .padding(.bottom, 12)
 
-                if appState.isAuthenticated {
-                    activeLibraryBanner
-                    connectionBanner
-
-                    NowPlayingCard(
-                        metadata: appState.nowPlaying,
-                        playbackState: appState.playbackState,
-                        playbackProgress: appState.playbackProgress,
-                        playbackPosition: appState.playbackPosition,
-                        playbackDuration: appState.playbackDuration,
-                        isShuffleEnabled: appState.isShuffleEnabled,
-                        onPlayPause: appState.togglePlayback,
-                        onNext: appState.nextTrack,
-                        onPrevious: appState.previousTrack,
-                        onSeek: appState.seekToProgress,
-                        onToggleShuffle: appState.toggleShuffle
-                    )
-
-                    if showingSettings {
-                        SettingsView(appState: appState)
-                            .frame(width: MenuBarLayout.contentWidth, alignment: .leading)
-                            .background(AppTheme.panelFillSoft, in: RoundedRectangle(cornerRadius: AppCornerRadius.medium, style: .continuous))
-                    } else {
-                        let visibility = appState.settingsStore.settings.sectionVisibility
-
-                        if visibility.showRecentlyPlayedAlbums && !appState.recentlyPlayedAlbums.isEmpty {
-                            AlbumCarouselSection(
-                                title: "Recently Played",
-                                items: appState.recentlyPlayedAlbums,
-                                pageSize: 4,
-                                onSelect: appState.playAlbum
-                            )
-                        }
-
-                        if visibility.showRecentlyAddedAlbums && !appState.recentlyAddedAlbums.isEmpty {
-                            AlbumCarouselSection(
-                                title: "Recently Added",
-                                items: appState.recentlyAddedAlbums,
-                                pageSize: 4,
-                                onSelect: appState.playAlbum
-                            )
-                        }
-
-                        if visibility.showPlaylists && !appState.playlists.isEmpty {
-                            PlaylistCarouselSection(
-                                title: "Playlists",
-                                items: appState.playlists,
-                                pageSize: 8,
-                                onSelect: appState.playPlaylist
-                            )
-                        }
-
-                        if !appState.isLoadingLibrary,
-                           appState.recentlyPlayedAlbums.isEmpty,
-                           appState.recentlyAddedAlbums.isEmpty,
-                           appState.playlists.isEmpty {
-                            EmptyLibraryCard()
-                        }
-                    }
-                } else {
-                    LoginPromptCard(
-                        authState: appState.authService.status.state,
-                        onConnect: appState.beginPlexLogin,
-                        onOpenBrowser: appState.authService.reopenBrowser
-                    )
+            ScrollView {
+                VStack(spacing: 14) {
+                    scrollableContent
                 }
-
+                .padding(.horizontal, 14)
+                .padding(.bottom, 12)
+                .frame(width: MenuBarLayout.contentWidth, alignment: .top)
+                .frame(maxWidth: .infinity, minHeight: MenuBarLayout.minPopupHeight, alignment: .top)
             }
-            .padding(14)
-            .frame(width: MenuBarLayout.contentWidth, alignment: .top)
-            .frame(maxWidth: .infinity, minHeight: MenuBarLayout.minPopupHeight, alignment: .top)
         }
         .frame(width: MenuBarLayout.popupWidth)
         .frame(minHeight: MenuBarLayout.minPopupHeight)
@@ -97,16 +39,104 @@ struct MenuBarRootView: View {
             )
         )
         .foregroundStyle(.white)
-        .onChange(of: appState.shouldOpenSettingsForLibraryError) { _, shouldOpenSettings in
-            if shouldOpenSettings {
-                showingSettings = true
+    }
+
+    @ViewBuilder
+    private var scrollableContent: some View {
+        if appState.isAuthenticated {
+            if appState.shouldPromptForServerSelection {
+                ChooseServerCard(appState: appState)
+            } else {
+                activeLibraryBanner
+                connectionBanner
+
+                NowPlayingCard(
+                    metadata: appState.nowPlaying,
+                    playbackState: appState.playbackState,
+                    playbackProgress: appState.playbackProgress,
+                    playbackPosition: appState.playbackPosition,
+                    playbackDuration: appState.playbackDuration,
+                    isShuffleEnabled: appState.isShuffleEnabled,
+                    onPlayPause: appState.togglePlayback,
+                    onNext: appState.nextTrack,
+                    onPrevious: appState.previousTrack,
+                    onSeek: appState.seekToProgress,
+                    onToggleShuffle: appState.toggleShuffle
+                )
             }
+
+            if showingSettings {
+                SettingsView(appState: appState)
+                    .frame(width: MenuBarLayout.contentWidth, alignment: .leading)
+                    .background(AppTheme.panelFillSoft, in: RoundedRectangle(cornerRadius: AppCornerRadius.medium, style: .continuous))
+            } else if !appState.shouldPromptForServerSelection {
+                let visibility = appState.settingsStore.settings.sectionVisibility
+
+                if visibility.showRecentlyPlayedAlbums && !appState.recentlyPlayedAlbums.isEmpty {
+                    AlbumCarouselSection(
+                        title: "Recently Played",
+                        items: appState.recentlyPlayedAlbums,
+                        pageSize: 4,
+                        onSelect: appState.playAlbum
+                    )
+                }
+
+                if visibility.showRecentlyAddedAlbums && !appState.recentlyAddedAlbums.isEmpty {
+                    AlbumCarouselSection(
+                        title: "Recently Added",
+                        items: appState.recentlyAddedAlbums,
+                        pageSize: 4,
+                        onSelect: appState.playAlbum
+                    )
+                }
+
+                if visibility.showPlaylists && !appState.playlists.isEmpty {
+                    PlaylistCarouselSection(
+                        title: "Playlists",
+                        items: appState.playlists,
+                        pageSize: 8,
+                        onSelect: appState.playPlaylist
+                    )
+                }
+
+                if visibility.showStations && !appState.stations.isEmpty {
+                    StationCarouselSection(
+                        title: "Stations",
+                        items: appState.stations,
+                        pageSize: 8,
+                        onSelect: appState.playStation
+                    )
+                }
+
+                if !appState.isLoadingLibrary,
+                   appState.recentlyPlayedAlbums.isEmpty,
+                   appState.recentlyAddedAlbums.isEmpty,
+                   appState.playlists.isEmpty,
+                   appState.stations.isEmpty {
+                    EmptyLibraryCard()
+                }
+            }
+        } else {
+            LoginPromptCard(
+                authState: appState.authService.status.state,
+                onConnect: appState.beginPlexLogin,
+                onOpenBrowser: appState.authService.reopenBrowser
+            )
         }
     }
 
     private var topBar: some View {
-        HStack {
-            Text(showingSettings ? "Settings" : "Plex Music")
+        HStack(spacing: 10) {
+            Button(action: onClose) {
+                Circle()
+                    .fill(Color(red: 1.0, green: 0.74, blue: 0.18))
+                    .frame(width: 12, height: 12)
+            }
+            .buttonStyle(.plain)
+            .focusable(false)
+            .interactiveCursor()
+
+            Text(showingSettings ? "PlexTray / Settings" : "PlexTray")
                 .font(.system(size: 14, weight: .bold, design: .rounded))
 
             Spacer()
@@ -183,6 +213,16 @@ struct MenuBarRootView: View {
                     Text(error)
                         .font(.system(size: 11, weight: .medium, design: .rounded))
                         .lineLimit(2)
+                    Spacer()
+                    Button {
+                        appState.dismissLibraryLoadError()
+                    } label: {
+                        Image(systemName: "xmark")
+                    }
+                    .buttonStyle(.plain)
+                    .focusable(false)
+                    .interactiveCursor()
+                    .foregroundStyle(.white.opacity(0.72))
                 }
             }
             .padding(8)
@@ -238,6 +278,65 @@ private struct EmptyLibraryCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
         .background(AppTheme.panelFill, in: RoundedRectangle(cornerRadius: AppCornerRadius.card, style: .continuous))
+    }
+}
+
+private struct ChooseServerCard: View {
+    @ObservedObject var appState: AppState
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text(greetingTitle)
+                .font(.system(size: 18, weight: .bold, design: .rounded))
+
+            Text("Choose a Plex server to use as your default. You can change it later in settings.")
+                .font(.system(size: 12, weight: .medium, design: .rounded))
+                .foregroundStyle(.white.opacity(0.76))
+
+            VStack(spacing: 8) {
+                ForEach(appState.availableServers) { server in
+                    Button {
+                        appState.selectServer(id: server.id)
+                    } label: {
+                        HStack(spacing: 10) {
+                            Image(systemName: "externaldrive")
+                                .foregroundStyle(AppTheme.accent)
+                            Text(server.name)
+                                .font(.system(size: 13, weight: .semibold, design: .rounded))
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 11, weight: .bold))
+                                .foregroundStyle(.white.opacity(0.5))
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 11)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(AppTheme.overlayMedium, in: RoundedRectangle(cornerRadius: AppCornerRadius.medium, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                    .focusable(false)
+                    .interactiveCursor(disabled: appState.isLoadingLibrary)
+                    .disabled(appState.isLoadingLibrary)
+                }
+            }
+
+            if let error = appState.libraryLoadError {
+                Text(error)
+                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.72))
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .background(AppTheme.panelFill, in: RoundedRectangle(cornerRadius: AppCornerRadius.card, style: .continuous))
+    }
+
+    private var greetingTitle: String {
+        if let username = appState.authenticatedUsername {
+            return "Welcome, \(username)"
+        }
+
+        return "Welcome to PlexTray"
     }
 }
 
@@ -334,19 +433,9 @@ private struct NowPlayingCard: View {
     var body: some View {
         VStack(spacing: 10) {
             HStack(spacing: 12) {
-                AsyncImage(url: metadata.artworkURL) { phase in
-                    switch phase {
-                    case let .success(image):
-                        image
-                            .resizable()
-                            .scaledToFill()
-                    default:
-                        Color.white.opacity(0.12)
-                            .overlay(Image(systemName: "music.note.list"))
-                    }
-                }
+                ArtworkImage(url: metadata.artworkURL, placeholderSystemImage: "music.note.list")
                 .frame(width: 86, height: 86)
-                .clipShape(RoundedRectangle(cornerRadius: AppCornerRadius.medium, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: AppCornerRadius.compact, style: .continuous))
 
                 VStack(alignment: .leading, spacing: 4) {
                     Text(metadata.trackName)
@@ -365,9 +454,9 @@ private struct NowPlayingCard: View {
                 Spacer()
             }
 
-            HStack(spacing: 20) {
+            HStack(spacing: 16) {
                 transportButton(icon: "backward.fill", action: onPrevious)
-                transportButton(icon: playbackState.systemImageName, action: onPlayPause)
+                transportButton(icon: playbackState.actionSystemImageName, action: onPlayPause)
                 transportButton(icon: "forward.fill", action: onNext)
                 transportButton(icon: "shuffle", isActive: isShuffleEnabled, action: onToggleShuffle)
             }
@@ -379,14 +468,12 @@ private struct NowPlayingCard: View {
                         set: { newValue in
                             isSeeking = true
                             sliderValue = newValue
+                            onSeek(newValue)
                         }
                     ),
                     in: 0 ... 1,
                     onEditingChanged: { editing in
                         isSeeking = editing
-                        if !editing {
-                            onSeek(sliderValue)
-                        }
                     }
                 )
 
@@ -413,8 +500,8 @@ private struct NowPlayingCard: View {
     private func transportButton(icon: String, isActive: Bool = false, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: icon)
-                .font(.system(size: 14, weight: .semibold))
-                .frame(width: 34, height: 34)
+                .font(.system(size: 12, weight: .semibold))
+                .frame(width: 36, height: 36)
                 .background((isActive ? AppTheme.accentActiveBackground : AppTheme.transportFill), in: Circle())
         }
         .buttonStyle(.plain)
@@ -448,14 +535,7 @@ private struct AlbumCarouselSection: View {
                                 onSelect(album)
                             } label: {
                                 VStack(alignment: .leading, spacing: 6) {
-                                    AsyncImage(url: album.artworkURL) { phase in
-                                        switch phase {
-                                        case let .success(image):
-                                            image.resizable().scaledToFill()
-                                        default:
-                                            Color.white.opacity(0.12)
-                                        }
-                                    }
+                                    ArtworkImage(url: album.artworkURL, placeholderSystemImage: "music.note")
                                     .frame(width: 100, height: 100)
                                     .clipShape(RoundedRectangle(cornerRadius: AppCornerRadius.small, style: .continuous))
 
@@ -504,6 +584,42 @@ private struct AlbumCarouselSection: View {
         }
 
         return pageItems
+    }
+}
+
+private struct ArtworkImage: View {
+    let url: URL?
+    let placeholderSystemImage: String
+
+    var body: some View {
+        AsyncImage(url: url) { phase in
+            switch phase {
+            case let .success(image):
+                image
+                    .resizable()
+                    .scaledToFill()
+            case .empty:
+                placeholder(isLoading: url != nil)
+            case .failure:
+                placeholder(isLoading: false)
+            @unknown default:
+                placeholder(isLoading: false)
+            }
+        }
+    }
+
+    private func placeholder(isLoading: Bool) -> some View {
+        Color.white.opacity(0.12)
+            .overlay {
+                Image(systemName: placeholderSystemImage)
+                    .foregroundStyle(.white.opacity(0.55))
+            }
+            .overlay {
+                if isLoading {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+            }
     }
 }
 
@@ -563,6 +679,76 @@ private struct PlaylistCarouselSection: View {
     }
 
     private var currentItems: [PlexPlaylist?] {
+        let start = page * pageSize
+        guard start < items.count else {
+            return Array(repeating: nil, count: pageSize)
+        }
+
+        let end = min(start + pageSize, items.count)
+        let pageItems = Array(items[start..<end]).map(Optional.some)
+        if pageItems.count < pageSize {
+            return pageItems + Array(repeating: nil, count: pageSize - pageItems.count)
+        }
+
+        return pageItems
+    }
+}
+
+private struct StationCarouselSection: View {
+    let title: String
+    let items: [PlexStation]
+    let pageSize: Int
+    let onSelect: (PlexStation) -> Void
+    @State private var page = 0
+
+    var body: some View {
+        if !items.isEmpty {
+            CarouselContainer(title: title, page: $page, maxPage: maxPage) {
+                VStack(spacing: 8) {
+                    ForEach(0..<2, id: \.self) { row in
+                        HStack(spacing: 8) {
+                            ForEach(0..<4, id: \.self) { column in
+                                let index = row * 4 + column
+                                if let station = currentItems[index] {
+                                    Button {
+                                        onSelect(station)
+                                    } label: {
+                                        HStack(spacing: 6) {
+                                            Image(systemName: "radio")
+                                                .foregroundStyle(AppTheme.accent)
+                                            Text(station.title)
+                                                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                                                .lineLimit(2)
+                                        }
+                                        .padding(8)
+                                        .frame(width: 101, height: 56, alignment: .leading)
+                                        .background(AppTheme.panelFill, in: RoundedRectangle(cornerRadius: AppCornerRadius.compact, style: .continuous))
+                                    }
+                                    .buttonStyle(.plain)
+                                    .interactiveCursor()
+                                    .contentShape(Rectangle())
+                                } else {
+                                    Color.clear
+                                        .frame(width: 101, height: 56)
+                                }
+                            }
+                        }
+                    }
+                }
+                .frame(width: MenuBarLayout.contentWidth - 4, alignment: .leading)
+            }
+            .onChange(of: items.count) { _, _ in
+                page = min(page, maxPage)
+            }
+        }
+    }
+
+    private var maxPage: Int {
+        guard !items.isEmpty else { return 0 }
+        return (items.count - 1) / pageSize
+    }
+
+    private var currentItems: [PlexStation?] {
         let start = page * pageSize
         guard start < items.count else {
             return Array(repeating: nil, count: pageSize)
@@ -652,11 +838,26 @@ private struct SettingsView: View {
                     toggleRow("Recently Added Albums", isOn: showRecentlyAddedBinding)
                     dividerRow
                     toggleRow("Playlists", isOn: showPlaylistsBinding)
+                    dividerRow
+                    toggleRow("Stations", isOn: showStationsBinding)
                 }
 
                 settingsSection("Playback") {
                     toggleRow("Loudness Leveling", isOn: loudnessLevelingBinding)
+                    dividerRow
+                    pickerRow("Count as Listened", selection: listenedThresholdBinding, items: listenedThresholdOptions)
                 }
+
+                Button {
+                    NSApp.terminate(nil)
+                } label: {
+                    Label("Quit", systemImage: "power")
+                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                }
+                .buttonStyle(.plain)
+                .focusable(false)
+                .interactiveCursor()
+                .foregroundStyle(.red.opacity(0.9))
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -742,12 +943,32 @@ private struct SettingsView: View {
         }
     }
 
+    private var showStationsBinding: Binding<Bool> {
+        Binding {
+            appState.settingsStore.settings.sectionVisibility.showStations
+        } set: { newValue in
+            appState.settingsStore.settings.sectionVisibility.showStations = newValue
+        }
+    }
+
     private var loudnessLevelingBinding: Binding<Bool> {
         Binding {
             appState.isLoudnessLevelingEnabled
         } set: { newValue in
             appState.setLoudnessLevelingEnabled(newValue)
         }
+    }
+
+    private var listenedThresholdBinding: Binding<Int> {
+        Binding {
+            appState.listenedThresholdPercentage
+        } set: { newValue in
+            appState.setListenedThresholdPercentage(newValue)
+        }
+    }
+
+    private var listenedThresholdOptions: [(String, Int)] {
+        stride(from: 5, through: 100, by: 5).map { ("\($0)%", $0) }
     }
 
     @ViewBuilder

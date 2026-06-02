@@ -13,11 +13,13 @@ final class AppState: ObservableObject {
     @Published var recentlyPlayedAlbums: [PlexAlbum] = []
     @Published var recentlyAddedAlbums: [PlexAlbum] = []
     @Published var playlists: [PlexPlaylist] = []
+    @Published var stations: [PlexStation] = []
     @Published var isLoadingLibrary = false
     @Published var libraryLoadError: String?
     @Published var availableServers: [PlexServer] = []
     @Published var availableLibraries: [PlexMusicLibrary] = []
     @Published var currentLoadingMessage: String?
+    @Published private(set) var shouldPresentInitialLoadFailure = false
 
     let settingsStore = SettingsStore()
     let authService = PlexAuthService()
@@ -26,18 +28,34 @@ final class AppState: ObservableObject {
     private let homeFetchLimit = 12
     private var cancellables = Set<AnyCancellable>()
 
+    private enum PlaybackSource {
+        case library
+        case album(PlexAlbum, PlexMusicLibrary)
+        case playlist(PlexPlaylist)
+        case station(PlexStation)
+    }
+
     private var orderedPlaybackQueue: [PlexTrack] = []
     private var playbackQueue: [PlexTrack] = []
     private var usesServerManagedQueueOrder = false
+    private var activePlaybackSource: PlaybackSource?
     private var currentQueueIndex: Int = 0
     private var player: AVPlayer?
     private var timeObserverToken: Any?
     private var playerItemEndObserver: AnyCancellable?
+    private var playerTimeControlStatusObserver: AnyCancellable?
     private var preferredQueueTrackID: String?
     private var playbackPreparationID: Int = 0
+    private var seekID: Int = 0
+    private var isPlaybackRequested = false
     private var loudnessGainCache: [String: Float] = [:]
     private var missingLoudnessAnalysisTrackIDs = Set<String>()
     private var activeServerPlayQueue: ServerPlayQueueContext?
+    private var trackedTrack: PlexTrack?
+    private var hasMarkedTrackedTrackListened = false
+    private var lastTimelineReportDate: Date?
+    private var timelineReportTask: Task<Void, Never>?
+    private let timelineReportInterval: TimeInterval = 10
 
     private struct ServerPlayQueueContext {
         let id: Int
@@ -66,10 +84,10 @@ final class AppState: ObservableObject {
     var statusIconName: String {
         if !shouldPreserveNowPlayingStatus,
            isShowingTransientStatus {
-            return playbackState == .playing ? PlaybackState.buffering.systemImageName : playbackState.systemImageName
+            return PlaybackState.buffering.statusSystemImageName
         }
 
-        return playbackState.systemImageName
+        return playbackState.statusSystemImageName
     }
 
     private var transientStatusLine: String? {
@@ -115,8 +133,21 @@ final class AppState: ObservableObject {
         authService.authToken != nil
     }
 
+    var authenticatedUsername: String? {
+        guard case let .authenticated(username) = authService.status.state else {
+            return nil
+        }
+
+        let trimmedUsername = username.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmedUsername.isEmpty ? nil : trimmedUsername
+    }
+
     var isLoudnessLevelingEnabled: Bool {
         settingsStore.settings.loudnessLevelingEnabled
+    }
+
+    var listenedThresholdPercentage: Int {
+        settingsStore.settings.listenedThresholdPercentage
     }
 
     var selectedServerID: String? {
@@ -136,7 +167,7 @@ final class AppState: ObservableObject {
     }
 
     var hasExistingContent: Bool {
-        !recentlyPlayedAlbums.isEmpty || !recentlyAddedAlbums.isEmpty || !playlists.isEmpty
+        !recentlyPlayedAlbums.isEmpty || !recentlyAddedAlbums.isEmpty || !playlists.isEmpty || !stations.isEmpty
     }
 
     var loadingTargetDescription: String? {
@@ -147,10 +178,8 @@ final class AppState: ObservableObject {
         return "\(serverName) / \(libraryTitle)"
     }
 
-    var shouldOpenSettingsForLibraryError: Bool {
-        guard let libraryLoadError else { return false }
-        let normalizedError = libraryLoadError.lowercased()
-        return normalizedError.contains("timed out") || normalizedError.contains("timeout")
+    var shouldPromptForServerSelection: Bool {
+        isAuthenticated && !availableServers.isEmpty && selectedServer == nil
     }
 
     var playbackProgress: Double {
@@ -166,14 +195,14 @@ final class AppState: ObservableObject {
         guard let player else { return }
 
         switch playbackState {
-        case .playing:
+        case .playing, .buffering:
+            isPlaybackRequested = false
             player.pause()
-            playbackState = .paused
+            transitionPlaybackState(to: .paused)
         case .paused, .stopped:
+            isPlaybackRequested = true
             player.play()
-            playbackState = .playing
-        case .buffering:
-            break
+            synchronizePlaybackState(with: player.timeControlStatus)
         }
     }
 
@@ -204,13 +233,19 @@ final class AppState: ObservableObject {
 
         let clampedProgress = min(max(progress, 0), 1)
         let targetTime = CMTime(seconds: playbackDuration * clampedProgress, preferredTimescale: 600)
+        let currentSeekID = nextSeekID()
         pendingSeekProgress = clampedProgress
         playbackPosition = min(max(targetTime.seconds, 0), playbackDuration)
 
-        Task {
-            await player.seek(to: targetTime, toleranceBefore: .zero, toleranceAfter: .zero)
-            playbackPosition = min(max(targetTime.seconds, 0), playbackDuration)
-            pendingSeekProgress = nil
+        player.seek(to: targetTime, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, currentSeekID == self.seekID else { return }
+
+                self.playbackPosition = min(max(targetTime.seconds, 0), self.playbackDuration)
+                self.pendingSeekProgress = nil
+                self.reportTrackedPlaybackTimeline(state: self.playbackState)
+                self.markTrackedTrackListenedIfNeeded()
+            }
         }
     }
 
@@ -230,6 +265,25 @@ final class AppState: ObservableObject {
                     userToken: userToken,
                     playQueue: activeServerPlayQueue,
                     keepingTrackID: currentTrackID
+                )
+            }
+            return
+        }
+
+        if case let .album(album, library) = activePlaybackSource,
+           isShuffleEnabled,
+           orderedPlaybackQueue.count >= 20,
+           let server = selectedServer,
+           let userToken = authService.authToken,
+           let currentTrackRatingKey = currentTrack?.ratingKey {
+            Task {
+                await adoptServerQueueForAlbumShuffle(
+                    album: album,
+                    library: library,
+                    server: server,
+                    userToken: userToken,
+                    currentTrackRatingKey: currentTrackRatingKey,
+                    keepingTrackID: currentTrack?.id
                 )
             }
             return
@@ -255,6 +309,11 @@ final class AppState: ObservableObject {
         }
     }
 
+    func setListenedThresholdPercentage(_ percentage: Int) {
+        settingsStore.settings.listenedThresholdPercentage = min(max(percentage, 5), 100)
+        markTrackedTrackListenedIfNeeded()
+    }
+
     func beginPlexLogin() {
         Task {
             await authService.beginLogin()
@@ -263,6 +322,7 @@ final class AppState: ObservableObject {
     }
 
     func signOut() {
+        stopTrackingCurrentTrack()
         authService.signOut()
         settingsStore.settings.selectedServerID = nil
         settingsStore.settings.selectedLibraryID = nil
@@ -272,15 +332,18 @@ final class AppState: ObservableObject {
         recentlyPlayedAlbums = []
         recentlyAddedAlbums = []
         playlists = []
+        stations = []
         orderedPlaybackQueue = []
         playbackQueue = []
         usesServerManagedQueueOrder = false
+        activePlaybackSource = nil
         currentQueueIndex = 0
         activeServerPlayQueue = nil
         nowPlaying = .placeholder
         libraryLoadError = nil
         currentLoadingMessage = nil
         playbackState = .stopped
+        isPlaybackRequested = false
         playbackPosition = 0
         playbackDuration = 0
 
@@ -288,6 +351,7 @@ final class AppState: ObservableObject {
         removeTimeObserver()
         player = nil
         playerItemEndObserver = nil
+        playerTimeControlStatusObserver = nil
         loudnessGainCache.removeAll()
         missingLoudnessAnalysisTrackIDs.removeAll()
     }
@@ -298,14 +362,23 @@ final class AppState: ObservableObject {
         }
     }
 
+    func dismissLibraryLoadError() {
+        libraryLoadError = nil
+    }
+
+    func didPresentInitialLoadFailure() {
+        shouldPresentInitialLoadFailure = false
+    }
+
     func selectServer(id: String) {
         guard settingsStore.settings.selectedServerID != id else { return }
 
         settingsStore.settings.selectedServerID = id
         settingsStore.settings.selectedLibraryID = nil
+        availableLibraries = []
 
         Task {
-            await reloadLibrariesAndContentForSelectedServer()
+            await reloadLibrariesAndContentForSelectedServer(id: id)
         }
     }
 
@@ -326,9 +399,11 @@ final class AppState: ObservableObject {
     }
 
     private func playAlbumSelection(_ album: PlexAlbum) async {
+        guard let library = selectedLibrary else { return }
+        activePlaybackSource = .album(album, library)
+
         await playSelection(named: album.title) {
             guard let server = self.selectedServer,
-                  let library = self.selectedLibrary,
                   let userToken = self.authService.authToken else {
                 throw PlexAPIError.noReachableServer
             }
@@ -394,6 +469,7 @@ final class AppState: ObservableObject {
 
     func playPlaylist(_ playlist: PlexPlaylist) {
         Task {
+            self.activePlaybackSource = .playlist(playlist)
             await playServerQueueSelection(named: playlist.title) {
                 guard let server = self.selectedServer,
                       let userToken = self.authService.authToken else {
@@ -405,6 +481,24 @@ final class AppState: ObservableObject {
                     playlist: playlist,
                     userToken: userToken,
                     shuffle: self.isShuffleEnabled
+                )
+            }
+        }
+    }
+
+    func playStation(_ station: PlexStation) {
+        Task {
+            self.activePlaybackSource = .station(station)
+            await playServerQueueSelection(named: station.title) {
+                guard let server = self.selectedServer,
+                      let userToken = self.authService.authToken else {
+                    throw PlexAPIError.noReachableServer
+                }
+
+                return try await self.apiClient.createStationPlayQueue(
+                    server: server,
+                    station: station,
+                    userToken: userToken
                 )
             }
         }
@@ -424,7 +518,10 @@ final class AppState: ObservableObject {
             logDebug("Found \(servers.count) server(s)")
 
             guard let server = resolveServer(from: servers) else {
-                throw PlexAPIError.noReachableServer
+                settingsStore.settings.selectedServerID = nil
+                settingsStore.settings.selectedLibraryID = nil
+                availableLibraries = []
+                throw PlexAPIError.serverSelectionRequired
             }
 
             settingsStore.settings.selectedServerID = server.id
@@ -446,6 +543,7 @@ final class AppState: ObservableObject {
             logDebug("Library load completed")
         } catch {
             libraryLoadError = error.localizedDescription
+            shouldPresentInitialLoadFailure = true
             logDebug("Load failed: \(error.localizedDescription)")
         }
 
@@ -453,9 +551,9 @@ final class AppState: ObservableObject {
         currentLoadingMessage = nil
     }
 
-    private func reloadLibrariesAndContentForSelectedServer() async {
+    private func reloadLibrariesAndContentForSelectedServer(id: String) async {
         guard let userToken = authService.authToken,
-              let selectedServer = selectedServer else {
+              let selectedServer = availableServers.first(where: { $0.id == id }) else {
             return
         }
 
@@ -466,6 +564,8 @@ final class AppState: ObservableObject {
         do {
             logDebug("Fetching libraries for \(selectedServer.name)")
             let libraries = try await apiClient.fetchMusicLibraries(server: selectedServer, userToken: userToken)
+            guard selectedServerID == selectedServer.id else { return }
+
             availableLibraries = libraries
             logDebug("Found \(libraries.count) library/libraries")
 
@@ -525,7 +625,10 @@ final class AppState: ObservableObject {
             logDebug("Found \(servers.count) server(s)")
 
             guard let server = resolveServer(from: servers) else {
-                throw PlexAPIError.noReachableServer
+                settingsStore.settings.selectedServerID = nil
+                settingsStore.settings.selectedLibraryID = nil
+                availableLibraries = []
+                throw PlexAPIError.serverSelectionRequired
             }
 
             settingsStore.settings.selectedServerID = server.id
@@ -582,13 +685,15 @@ final class AppState: ObservableObject {
         recentlyPlayedAlbums = homeContent.recentlyPlayedAlbums
         recentlyAddedAlbums = homeContent.recentlyAddedAlbums
         playlists = homeContent.playlists
-        logDebug("Loaded \(recentlyPlayedAlbums.count) recent played, \(recentlyAddedAlbums.count) recent added, \(playlists.count) playlists")
+        stations = homeContent.stations
+        logDebug("Loaded \(recentlyPlayedAlbums.count) recent played, \(recentlyAddedAlbums.count) recent added, \(playlists.count) playlists, \(stations.count) stations")
     }
 
     private func reloadPlaybackQueue(server: PlexServer, library: PlexMusicLibrary, userToken: String) async throws {
         let queue = try await apiClient.fetchPlaybackQueue(server: server, library: library, userToken: userToken)
         logDebug("Loaded playback queue with \(queue.count) track(s)")
 
+        activePlaybackSource = .library
         activeServerPlayQueue = nil
         replacePlaybackQueue(with: queue, keepingTrackID: preferredQueueTrackID)
         preferredQueueTrackID = nil
@@ -596,6 +701,7 @@ final class AppState: ObservableObject {
         if let currentTrack {
             updateNowPlaying(from: currentTrack)
             await preparePlayer(for: currentTrack)
+            isPlaybackRequested = false
             playbackState = .paused
             logDebug("Prepared queue at track: \(currentTrack.title)")
         }
@@ -609,6 +715,7 @@ final class AppState: ObservableObject {
 
         updateNowPlaying(from: lastPlayedTrack)
         await preparePlayer(for: lastPlayedTrack)
+        isPlaybackRequested = false
         playbackState = .paused
         preferredQueueTrackID = lastPlayedTrack.id
 
@@ -618,11 +725,13 @@ final class AppState: ObservableObject {
     private func playCurrentTrack() async {
         guard let track = currentTrack else { return }
         updateNowPlaying(from: track)
+        isPlaybackRequested = true
         playbackState = .buffering
         await preparePlayer(for: track)
         guard currentTrack?.id == track.id else { return }
+        reportTrackedPlaybackTimeline(state: .buffering)
         player?.play()
-        playbackState = .playing
+        synchronizePlaybackState(with: player?.timeControlStatus ?? .waitingToPlayAtSpecifiedRate)
     }
 
     private func playSelection(named name: String, loader: @escaping () async throws -> [PlexTrack]) async {
@@ -677,6 +786,8 @@ final class AppState: ObservableObject {
 
         guard preparationID == playbackPreparationID else { return }
 
+        invalidatePendingSeek()
+        beginTracking(track)
         observePlaybackEnd(for: item)
 
         if let player {
@@ -687,6 +798,7 @@ final class AppState: ObservableObject {
 
         player?.volume = volume
         observePlaybackTime()
+        observePlayerTimeControlStatus()
         updatePlaybackTiming(from: item)
     }
 
@@ -763,7 +875,7 @@ final class AppState: ObservableObject {
 
             Task { @MainActor in
                 let seconds = time.seconds
-                if seconds.isFinite {
+                if seconds.isFinite, self.pendingSeekProgress == nil {
                     self.playbackPosition = max(0, seconds)
                 }
 
@@ -772,8 +884,22 @@ final class AppState: ObservableObject {
                    duration > 0 {
                     self.playbackDuration = duration
                 }
+
+                self.reportTrackedPlaybackTimelineIfNeeded()
+                self.markTrackedTrackListenedIfNeeded()
             }
         }
+    }
+
+    private func observePlayerTimeControlStatus() {
+        guard let player, playerTimeControlStatusObserver == nil else { return }
+
+        playerTimeControlStatusObserver = player.publisher(for: \.timeControlStatus)
+            .sink { [weak self] status in
+                Task { @MainActor in
+                    self?.synchronizePlaybackState(with: status)
+                }
+            }
     }
 
     private func updatePlaybackTiming(from item: AVPlayerItem) {
@@ -782,6 +908,8 @@ final class AppState: ObservableObject {
         let duration = item.duration.seconds
         if duration.isFinite, duration > 0 {
             playbackDuration = duration
+        } else if let durationMilliseconds = trackedTrack?.durationMilliseconds {
+            playbackDuration = Double(durationMilliseconds) / 1_000
         } else {
             playbackDuration = 0
         }
@@ -796,6 +924,9 @@ final class AppState: ObservableObject {
     private func handlePlaybackEnded() async {
         guard playbackQueue.indices.contains(currentQueueIndex) else { return }
 
+        markTrackedTrackListenedIfNeeded(force: true)
+        stopTrackingCurrentTrack()
+
         if currentQueueIndex < playbackQueue.count - 1 {
             currentQueueIndex += 1
             await playCurrentTrack()
@@ -805,13 +936,142 @@ final class AppState: ObservableObject {
 
         playbackPosition = 0
         await player?.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero)
-        playbackState = .paused
+        isPlaybackRequested = false
+        transitionPlaybackState(to: .paused)
         logDebug("Reached end of queue")
+    }
+
+    private func synchronizePlaybackState(with timeControlStatus: AVPlayer.TimeControlStatus) {
+        switch timeControlStatus {
+        case .paused:
+            transitionPlaybackState(to: isPlaybackRequested ? .buffering : .paused)
+        case .waitingToPlayAtSpecifiedRate:
+            transitionPlaybackState(to: isPlaybackRequested ? .buffering : .paused)
+        case .playing:
+            transitionPlaybackState(to: isPlaybackRequested ? .playing : .paused)
+        @unknown default:
+            transitionPlaybackState(to: isPlaybackRequested ? .buffering : .paused)
+        }
+    }
+
+    private func transitionPlaybackState(to newState: PlaybackState) {
+        guard playbackState != newState else { return }
+        playbackState = newState
+        reportTrackedPlaybackTimeline(state: newState)
+    }
+
+    private func beginTracking(_ track: PlexTrack) {
+        guard trackedTrack?.id != track.id else { return }
+
+        stopTrackingCurrentTrack()
+        trackedTrack = track
+        hasMarkedTrackedTrackListened = false
+        lastTimelineReportDate = nil
+    }
+
+    private func stopTrackingCurrentTrack() {
+        guard trackedTrack != nil else { return }
+        reportTrackedPlaybackTimeline(state: .stopped)
+        trackedTrack = nil
+        hasMarkedTrackedTrackListened = false
+        lastTimelineReportDate = nil
+    }
+
+    private func reportTrackedPlaybackTimelineIfNeeded() {
+        guard playbackState == .playing else { return }
+
+        if let lastTimelineReportDate,
+           Date().timeIntervalSince(lastTimelineReportDate) < timelineReportInterval {
+            return
+        }
+
+        reportTrackedPlaybackTimeline(state: .playing)
+    }
+
+    private func reportTrackedPlaybackTimeline(state: PlaybackState) {
+        guard let track = trackedTrack,
+              let ratingKey = track.ratingKey,
+              let server = selectedServer,
+              let userToken = authService.authToken else {
+            return
+        }
+
+        let positionMilliseconds = Int((playbackPosition * 1_000).rounded())
+        let durationMilliseconds = resolvedDurationMilliseconds(for: track)
+        let playQueue = activeServerPlayQueue
+        lastTimelineReportDate = Date()
+
+        let previousTimelineReportTask = timelineReportTask
+        timelineReportTask = Task {
+            await previousTimelineReportTask?.value
+
+            do {
+                try await apiClient.reportPlaybackTimeline(
+                    server: server,
+                    ratingKey: ratingKey,
+                    playQueueID: playQueue?.id,
+                    playQueueItemID: track.id == ratingKey ? nil : track.id,
+                    state: state,
+                    positionMilliseconds: positionMilliseconds,
+                    durationMilliseconds: durationMilliseconds,
+                    userToken: userToken
+                )
+            } catch {
+                logDebug("Timeline update failed for \(track.title): \(error.localizedDescription)")
+            }
+        }
+    }
+
+    private func markTrackedTrackListenedIfNeeded(force: Bool = false) {
+        guard !hasMarkedTrackedTrackListened,
+              let track = trackedTrack,
+              let ratingKey = track.ratingKey,
+              let server = selectedServer,
+              let userToken = authService.authToken else {
+            return
+        }
+
+        let durationMilliseconds = resolvedDurationMilliseconds(for: track)
+        guard durationMilliseconds > 0 else { return }
+
+        let listenedPercentage = (playbackPosition * 1_000 / Double(durationMilliseconds)) * 100
+        guard force || listenedPercentage >= Double(listenedThresholdPercentage) else { return }
+
+        hasMarkedTrackedTrackListened = true
+        Task {
+            do {
+                try await apiClient.markTrackListened(server: server, ratingKey: ratingKey, userToken: userToken)
+                logDebug("Marked \(track.title) listened at \(Int(listenedPercentage.rounded()))%")
+            } catch {
+                if trackedTrack?.id == track.id {
+                    hasMarkedTrackedTrackListened = false
+                }
+                logDebug("Listened update failed for \(track.title): \(error.localizedDescription)")
+            }
+        }
+    }
+
+    private func resolvedDurationMilliseconds(for track: PlexTrack) -> Int {
+        if trackedTrack?.id == track.id, playbackDuration.isFinite, playbackDuration > 0 {
+            return Int((playbackDuration * 1_000).rounded())
+        }
+
+        return track.durationMilliseconds ?? 0
     }
 
     private func nextPlaybackPreparationID() -> Int {
         playbackPreparationID += 1
         return playbackPreparationID
+    }
+
+    private func nextSeekID() -> Int {
+        seekID += 1
+        return seekID
+    }
+
+    private func invalidatePendingSeek() {
+        seekID += 1
+        pendingSeekProgress = nil
     }
 
     private func updateServerManagedShuffle(enabled: Bool, server: PlexServer, userToken: String, playQueue: ServerPlayQueueContext, keepingTrackID: String?) async {
@@ -846,6 +1106,43 @@ final class AppState: ObservableObject {
             }
 
             logDebug(enabled ? "Shuffle enabled" : "Shuffle disabled")
+        } catch {
+            isShuffleEnabled.toggle()
+            libraryLoadError = error.localizedDescription
+            logDebug("Shuffle update failed: \(error.localizedDescription)")
+        }
+    }
+
+    private func adoptServerQueueForAlbumShuffle(
+        album: PlexAlbum,
+        library: PlexMusicLibrary,
+        server: PlexServer,
+        userToken: String,
+        currentTrackRatingKey: String,
+        keepingTrackID: String?
+    ) async {
+        do {
+            let snapshot = try await apiClient.createAlbumPlayQueue(
+                server: server,
+                library: library,
+                album: album,
+                startingTrackRatingKey: currentTrackRatingKey,
+                userToken: userToken,
+                shuffle: true
+            )
+
+            activeServerPlayQueue = ServerPlayQueueContext(id: snapshot.id, itemCount: max(snapshot.totalCount, snapshot.tracks.count))
+            replacePlaybackQueue(
+                with: snapshot.tracks,
+                keepingTrackID: snapshot.selectedTrackID ?? keepingTrackID,
+                usesServerOrder: true
+            )
+
+            if let currentTrack {
+                updateNowPlaying(from: currentTrack)
+            }
+
+            logDebug("Shuffle enabled")
         } catch {
             isShuffleEnabled.toggle()
             libraryLoadError = error.localizedDescription
@@ -922,14 +1219,12 @@ final class AppState: ObservableObject {
     }
 
     private var selectedServer: PlexServer? {
-        guard !availableServers.isEmpty else { return nil }
-
         if let selectedID = settingsStore.settings.selectedServerID,
            let server = availableServers.first(where: { $0.id == selectedID }) {
             return server
         }
 
-        return availableServers.first
+        return nil
     }
 
     private var selectedLibrary: PlexMusicLibrary? {
@@ -949,7 +1244,7 @@ final class AppState: ObservableObject {
             return server
         }
 
-        return servers.first
+        return nil
     }
 
     private func resolveLibrary(from libraries: [PlexMusicLibrary]) -> PlexMusicLibrary? {

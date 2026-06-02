@@ -6,7 +6,20 @@ enum PlaybackState: String, Codable {
     case buffering
     case stopped
 
-    var systemImageName: String {
+    var statusSystemImageName: String {
+        switch self {
+        case .playing:
+            return "play.fill"
+        case .paused:
+            return "pause.fill"
+        case .stopped:
+            return "stop.fill"
+        case .buffering:
+            return "hourglass"
+        }
+    }
+
+    var actionSystemImageName: String {
         switch self {
         case .playing:
             return "pause.fill"
@@ -61,9 +74,16 @@ struct PlexPlaylist: Identifiable, Codable, Hashable {
     let trackCount: Int
 }
 
+struct PlexStation: Identifiable, Hashable {
+    let id: String
+    let title: String
+    let key: String
+}
+
 struct PlexTrack: Identifiable, Hashable {
     let id: String
     let ratingKey: String?
+    let durationMilliseconds: Int?
     let title: String
     let trackArtist: String?
     let albumArtist: String?
@@ -96,6 +116,7 @@ struct PlexHomeContent {
     let recentlyPlayedAlbums: [PlexAlbum]
     let recentlyAddedAlbums: [PlexAlbum]
     let playlists: [PlexPlaylist]
+    let stations: [PlexStation]
 }
 
 enum MenuBarField: String, CaseIterable, Codable, Identifiable {
@@ -151,11 +172,40 @@ struct SectionVisibility: Codable, Equatable {
     var showRecentlyPlayedAlbums: Bool
     var showRecentlyAddedAlbums: Bool
     var showPlaylists: Bool
+    var showStations: Bool
+
+    private enum CodingKeys: String, CodingKey {
+        case showRecentlyPlayedAlbums
+        case showRecentlyAddedAlbums
+        case showPlaylists
+        case showStations
+    }
+
+    init(
+        showRecentlyPlayedAlbums: Bool,
+        showRecentlyAddedAlbums: Bool,
+        showPlaylists: Bool,
+        showStations: Bool
+    ) {
+        self.showRecentlyPlayedAlbums = showRecentlyPlayedAlbums
+        self.showRecentlyAddedAlbums = showRecentlyAddedAlbums
+        self.showPlaylists = showPlaylists
+        self.showStations = showStations
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        showRecentlyPlayedAlbums = try container.decode(Bool.self, forKey: .showRecentlyPlayedAlbums)
+        showRecentlyAddedAlbums = try container.decode(Bool.self, forKey: .showRecentlyAddedAlbums)
+        showPlaylists = try container.decode(Bool.self, forKey: .showPlaylists)
+        showStations = try container.decodeIfPresent(Bool.self, forKey: .showStations) ?? true
+    }
 
     static let `default` = SectionVisibility(
         showRecentlyPlayedAlbums: true,
         showRecentlyAddedAlbums: true,
-        showPlaylists: true
+        showPlaylists: true,
+        showStations: true
     )
 }
 
@@ -165,6 +215,7 @@ struct AppSettings: Codable, Equatable {
     var selectedServerID: String?
     var selectedLibraryID: String?
     var loudnessLevelingEnabled: Bool
+    var listenedThresholdPercentage: Int
 
     private enum CodingKeys: String, CodingKey {
         case menuBarFormat
@@ -172,6 +223,7 @@ struct AppSettings: Codable, Equatable {
         case selectedServerID
         case selectedLibraryID
         case loudnessLevelingEnabled
+        case listenedThresholdPercentage
     }
 
     init(
@@ -179,13 +231,15 @@ struct AppSettings: Codable, Equatable {
         sectionVisibility: SectionVisibility,
         selectedServerID: String?,
         selectedLibraryID: String?,
-        loudnessLevelingEnabled: Bool
+        loudnessLevelingEnabled: Bool,
+        listenedThresholdPercentage: Int
     ) {
         self.menuBarFormat = menuBarFormat
         self.sectionVisibility = sectionVisibility
         self.selectedServerID = selectedServerID
         self.selectedLibraryID = selectedLibraryID
         self.loudnessLevelingEnabled = loudnessLevelingEnabled
+        self.listenedThresholdPercentage = listenedThresholdPercentage
     }
 
     init(from decoder: Decoder) throws {
@@ -195,6 +249,7 @@ struct AppSettings: Codable, Equatable {
         selectedServerID = try container.decodeIfPresent(String.self, forKey: .selectedServerID)
         selectedLibraryID = try container.decodeIfPresent(String.self, forKey: .selectedLibraryID)
         loudnessLevelingEnabled = try container.decodeIfPresent(Bool.self, forKey: .loudnessLevelingEnabled) ?? false
+        listenedThresholdPercentage = min(max(try container.decodeIfPresent(Int.self, forKey: .listenedThresholdPercentage) ?? 90, 5), 100)
     }
 
     static let `default` = AppSettings(
@@ -202,7 +257,8 @@ struct AppSettings: Codable, Equatable {
         sectionVisibility: .default,
         selectedServerID: nil,
         selectedLibraryID: nil,
-        loudnessLevelingEnabled: false
+        loudnessLevelingEnabled: false,
+        listenedThresholdPercentage: 90
     )
 }
 

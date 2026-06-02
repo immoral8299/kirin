@@ -5,6 +5,7 @@ enum PlexAPIError: LocalizedError {
     case unsupportedResponseFormat
     case noReachableServer
     case noTracksInLibrary
+    case serverSelectionRequired
 
     var errorDescription: String? {
         switch self {
@@ -16,14 +17,16 @@ enum PlexAPIError: LocalizedError {
             return "No reachable Plex server connection was found."
         case .noTracksInLibrary:
             return "No playable tracks were found in this library."
+        case .serverSelectionRequired:
+            return "Select a Plex server in settings to continue."
         }
     }
 }
 
 struct PlexAPIClient {
     private let session: URLSession
-    private let clientIdentifier = "menu-bar-plex-client"
-    private let productName = "MenuBarPlexClient"
+    private let clientIdentifier = "plextray"
+    private let productName = "PlexTray"
 
     init(session: URLSession = .shared) {
         self.session = session
@@ -121,18 +124,30 @@ struct PlexAPIClient {
             ] + pageQuery
         )
 
+        let stationsURL = buildURL(
+            base: server.baseURL,
+            path: "hubs/sections/\(library.id)",
+            query: [
+                URLQueryItem(name: "includeStations", value: "1"),
+                URLQueryItem(name: "includeStationDirectories", value: "1"),
+            ]
+        )
+
         async let recentlyViewedData = request(url: recentlyViewedURL, token: token)
         async let recentlyAddedData = request(url: recentlyAddedURL, token: token)
         async let playlistsData = request(url: playlistsURL, token: token)
+        async let stationsData = request(url: stationsURL, token: token)
 
         let recentlyPlayedAlbums = try parseAlbums(data: try await recentlyViewedData, server: server, token: token)
         let recentlyAddedAlbums = try parseAlbums(data: try await recentlyAddedData, server: server, token: token)
         let playlists = try parsePlaylists(data: try await playlistsData)
+        let stations = (try? parseStations(data: try await stationsData)) ?? []
 
         return PlexHomeContent(
             recentlyPlayedAlbums: recentlyPlayedAlbums,
             recentlyAddedAlbums: recentlyAddedAlbums,
-            playlists: playlists
+            playlists: playlists,
+            stations: stations
         )
     }
 
@@ -219,6 +234,23 @@ struct PlexAPIClient {
         return try await fetchPlayQueue(server: server, playQueueID: playQueueID, itemCount: totalCount, userToken: userToken)
     }
 
+    func createStationPlayQueue(server: PlexServer, station: PlexStation, userToken: String) async throws -> PlexPlayQueueSnapshot {
+        let token = server.accessToken ?? userToken
+        let query = [
+            URLQueryItem(name: "uri", value: "server://\(server.id)/com.plexapp.plugins.library\(station.key)"),
+            URLQueryItem(name: "type", value: "audio"),
+        ]
+
+        let url = buildURL(base: server.baseURL, path: "playQueues", query: query)
+        let container = try await requestContainer(url: url, token: token, method: "POST")
+        guard let playQueueID = container.int(for: ["playQueueID"]) else {
+            throw PlexAPIError.invalidResponse
+        }
+
+        let totalCount = max(container.int(for: ["playQueueTotalCount"]) ?? 1, 1)
+        return try await fetchPlayQueue(server: server, playQueueID: playQueueID, itemCount: totalCount, userToken: userToken)
+    }
+
     func createAlbumPlayQueue(server: PlexServer, library: PlexMusicLibrary, album: PlexAlbum, startingTrackRatingKey: String, userToken: String, shuffle: Bool) async throws -> PlexPlayQueueSnapshot {
         guard let libraryUUID = library.uuid else {
             throw PlexAPIError.invalidResponse
@@ -279,6 +311,50 @@ struct PlexAPIClient {
         return clampedGain(gain, peak: peak)
     }
 
+    func reportPlaybackTimeline(
+        server: PlexServer,
+        ratingKey: String,
+        playQueueID: Int?,
+        playQueueItemID: String?,
+        state: PlaybackState,
+        positionMilliseconds: Int,
+        durationMilliseconds: Int,
+        userToken: String
+    ) async throws {
+        let token = server.accessToken ?? userToken
+        var query = [
+            URLQueryItem(name: "identifier", value: "com.plexapp.plugins.library"),
+            URLQueryItem(name: "key", value: "/library/metadata/\(ratingKey)"),
+            URLQueryItem(name: "ratingKey", value: ratingKey),
+            URLQueryItem(name: "state", value: state.rawValue),
+            URLQueryItem(name: "time", value: String(max(positionMilliseconds, 0))),
+            URLQueryItem(name: "duration", value: String(max(durationMilliseconds, 0))),
+            URLQueryItem(name: "type", value: "music"),
+        ]
+
+        if let playQueueID {
+            query.append(URLQueryItem(name: "playQueueID", value: String(playQueueID)))
+            query.append(URLQueryItem(name: "containerKey", value: "/playQueues/\(playQueueID)"))
+        }
+
+        if let playQueueItemID {
+            query.append(URLQueryItem(name: "playQueueItemID", value: playQueueItemID))
+        }
+
+        let url = buildURL(base: server.baseURL, path: ":/timeline", query: query)
+        _ = try await request(url: url, token: token, method: "POST")
+    }
+
+    func markTrackListened(server: PlexServer, ratingKey: String, userToken: String) async throws {
+        let token = server.accessToken ?? userToken
+        let query = [
+            URLQueryItem(name: "identifier", value: "com.plexapp.plugins.library"),
+            URLQueryItem(name: "key", value: ratingKey),
+        ]
+        let url = buildURL(base: server.baseURL, path: ":/scrobble", query: query)
+        _ = try await request(url: url, token: token, method: "PUT")
+    }
+
     private func parseAlbums(data: Data, server: PlexServer, token: String?) throws -> [PlexAlbum] {
         let container = try mediaContainer(from: data)
         let metadataNodes = container.objectArray(for: ["Metadata", "metadata"])
@@ -331,6 +407,33 @@ struct PlexAPIClient {
             .sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
     }
 
+    private func parseStations(data: Data) throws -> [PlexStation] {
+        let container = try mediaContainer(from: data)
+        let stations = nestedObjects(in: container).compactMap { node -> PlexStation? in
+            guard let key = node.string(for: ["key"]),
+                  key.contains("/station/") || node.string(for: ["radio"]) == "1",
+                  let title = node.string(for: ["title"]) else {
+                return nil
+            }
+
+            return PlexStation(id: key, title: title, key: key)
+        }
+
+        return deduplicate(stations)
+    }
+
+    private func nestedObjects(in value: Any) -> [[String: Any]] {
+        if let object = value as? [String: Any] {
+            return [object] + object.values.flatMap(nestedObjects(in:))
+        }
+
+        if let array = value as? [Any] {
+            return array.flatMap(nestedObjects(in:))
+        }
+
+        return []
+    }
+
     private func parseTracks(data: Data, server: PlexServer, token: String?) throws -> [PlexTrack] {
         let container = try mediaContainer(from: data)
         let metadataNodes = container.objectArray(for: ["Metadata", "metadata"])
@@ -355,6 +458,7 @@ struct PlexAPIClient {
             return PlexTrack(
                 id: id,
                 ratingKey: node.string(for: ["ratingKey", "key", "id"]),
+                durationMilliseconds: node.int(for: ["duration"]),
                 title: node.string(for: ["title"]) ?? "Unknown Track",
                 trackArtist: node.string(for: ["originalTitle", "grandparentTitle"]),
                 albumArtist: node.string(for: ["grandparentTitle", "parentTitle"]),
@@ -413,6 +517,7 @@ struct PlexAPIClient {
             return PlexTrack(
                 id: id,
                 ratingKey: node.string(for: ["ratingKey", "key", "id"]),
+                durationMilliseconds: node.int(for: ["duration"]),
                 title: node.string(for: ["title"]) ?? "Unknown Track",
                 trackArtist: node.string(for: ["originalTitle", "grandparentTitle"]),
                 albumArtist: node.string(for: ["grandparentTitle", "parentTitle"]),
@@ -448,6 +553,7 @@ struct PlexAPIClient {
             return PlexTrack(
                 id: id,
                 ratingKey: node.string(for: ["ratingKey", "key", "id"]),
+                durationMilliseconds: node.int(for: ["duration"]),
                 title: node.string(for: ["title"]) ?? "Unknown Track",
                 trackArtist: node.string(for: ["originalTitle", "grandparentTitle"]),
                 albumArtist: node.string(for: ["grandparentTitle", "parentTitle"]),

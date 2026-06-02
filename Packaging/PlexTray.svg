@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title description">
+  <title id="title">PlexTray app icon</title>
+  <desc id="description">Purple play icon inside a wide rounded rectangle on a black background.</desc>
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#09090d"/>
+      <stop offset="0.55" stop-color="#030305"/>
+      <stop offset="1" stop-color="#0b0810"/>
+    </linearGradient>
+    <radialGradient id="ambientGlow" cx="50%" cy="50%" r="56%">
+      <stop offset="0" stop-color="#a89ec7" stop-opacity="0.18"/>
+      <stop offset="0.6" stop-color="#766c98" stop-opacity="0.05"/>
+      <stop offset="1" stop-color="#000000" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="panelFill" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#292532"/>
+      <stop offset="1" stop-color="#17141e"/>
+    </linearGradient>
+    <linearGradient id="panelStroke" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#c8baf0"/>
+      <stop offset="1" stop-color="#766c98"/>
+    </linearGradient>
+    <linearGradient id="playFill" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#c8baf0"/>
+      <stop offset="0.5" stop-color="#a89ec7"/>
+      <stop offset="1" stop-color="#8173ad"/>
+    </linearGradient>
+    <filter id="panelShadow" x="-20%" y="-50%" width="140%" height="200%">
+      <feDropShadow dx="0" dy="18" stdDeviation="22" flood-color="#000000" flood-opacity="0.58"/>
+      <feDropShadow dx="0" dy="0" stdDeviation="14" flood-color="#9d91c4" flood-opacity="0.18"/>
+    </filter>
+    <filter id="playShadow" x="-60%" y="-60%" width="220%" height="220%">
+      <feDropShadow dx="0" dy="8" stdDeviation="10" flood-color="#000000" flood-opacity="0.4"/>
+    </filter>
+  </defs>
+
+  <rect width="1024" height="1024" rx="224" fill="url(#background)"/>
+  <rect width="1024" height="1024" rx="224" fill="url(#ambientGlow)"/>
+
+  <rect
+    x="92"
+    y="357"
+    width="840"
+    height="280"
+    rx="82"
+    fill="url(#panelFill)"
+    stroke="url(#panelStroke)"
+    stroke-width="5"
+    filter="url(#panelShadow)"
+  />
+
+  <path
+    d="M449 408C449 387 472 374 490 385L636 473C654 484 654 510 636 521L490 609C472 620 449 607 449 586Z"
+    fill="url(#playFill)"
+    filter="url(#playShadow)"
+  />
+</svg>

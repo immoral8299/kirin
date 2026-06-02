@@ -3,7 +3,7 @@ import Combine
 import SwiftUI
 
 @main
-struct MenuBarPlexClientApp: App {
+struct PlexTrayApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     private let appState: AppState
 
@@ -39,7 +39,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 @MainActor
 final class StatusItemController {
-    private let initialStatusIconName = PlaybackState.buffering.systemImageName
+    private let initialStatusIconName = PlaybackState.buffering.statusSystemImageName
     private let initialStatusText = "Initializing..."
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let iconView = NSImageView(frame: .zero)
@@ -58,7 +58,7 @@ final class StatusItemController {
     private let panelSize = NSSize(width: 460, height: 520)
 
     init(appState: AppState) {
-        rootView = NSHostingView(rootView: MenuBarRootView(appState: appState))
+        rootView = NSHostingView(rootView: MenuBarRootView(appState: appState, onClose: {}))
         panel = NSPanel(
             contentRect: NSRect(origin: .zero, size: panelSize),
             styleMask: [.borderless, .nonactivatingPanel],
@@ -66,6 +66,7 @@ final class StatusItemController {
             defer: false
         )
         configurePanel()
+        rootView.rootView = makeRootView(appState: appState)
         configureButton()
         applyFallbackStatus()
         bind(appState: appState)
@@ -144,11 +145,26 @@ final class StatusItemController {
             .sink { [weak self, weak appState] _ in
                 guard let self, let appState else { return }
                 Task { @MainActor in
-                    self.rootView.rootView = MenuBarRootView(appState: appState)
+                    self.rootView.rootView = self.makeRootView(appState: appState)
                     self.updateStatus(iconName: appState.statusIconName, text: appState.statusLine)
                 }
             }
             .store(in: &cancellables)
+
+        appState.$shouldPresentInitialLoadFailure
+            .filter { $0 }
+            .sink { [weak self, weak appState] _ in
+                guard let self, let appState else { return }
+                self.showPanel()
+                appState.didPresentInitialLoadFailure()
+            }
+            .store(in: &cancellables)
+    }
+
+    private func makeRootView(appState: AppState) -> MenuBarRootView {
+        MenuBarRootView(appState: appState) { [weak self] in
+            self?.panel.orderOut(nil)
+        }
     }
 
     private func updateStatus(iconName: String, text: String) {
@@ -192,9 +208,13 @@ final class StatusItemController {
         if panel.isVisible {
             panel.orderOut(sender)
         } else {
-            positionPanel()
-            panel.orderFrontRegardless()
+            showPanel()
         }
+    }
+
+    private func showPanel() {
+        positionPanel()
+        panel.orderFrontRegardless()
     }
 
     private func updateStatusItemLength() {

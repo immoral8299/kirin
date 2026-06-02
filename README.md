@@ -1,6 +1,6 @@
-# MenuBarPlexClient
+# PlexTray
 
-MenuBarPlexClient is a macOS 14+ menu bar music client for Plex with a live in-menu UI.
+PlexTray is a macOS 14+ menu bar music client for Plex with a live in-menu UI.
 
 ## Current MVP Scaffold
 
@@ -23,16 +23,34 @@ MenuBarPlexClient is a macOS 14+ menu bar music client for Plex with a live in-m
 - Auth token persisted to Keychain.
 - Server and music-library discovery after auth, with persisted selection.
 - Home content fetched from Plex APIs with a first-page cap of 12 items per section; UI carousel handles pagination.
+- Plex music stations discovered from library hubs and played through server-managed audio queues.
 - Login-first prompt UI appears when not authenticated, with external-browser Plex PIN flow.
 - Basic AVPlayer-backed queue playback from library tracks with next/previous/play/pause controls.
+- Plex timeline progress reporting with a configurable percentage for counting a track as listened.
 - Tracks without Plex loudness analysis fall back to normal playback volume.
 
 ## Run
 
 ```bash
 swift build
-swift run MenuBarPlexClient
+swift run PlexTray
 ```
+
+## Release
+
+Build a drag-and-drop `.app` and `.dmg` locally:
+
+```bash
+./scripts/release-dmg.sh
+```
+
+Optional environment variables:
+
+- `VERSION=0.1.0`
+- `BUILD_NUMBER=1`
+- `BUNDLE_ID=com.yourcompany.PlexTray`
+- `SIGNING_IDENTITY="Developer ID Application: Your Name (TEAMID)"`
+- `NOTARY_PROFILE=AC_NOTARY`
 
 ## Next Implementation Steps
 

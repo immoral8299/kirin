@@ -4,13 +4,13 @@
 import PackageDescription
 
 let package = Package(
-    name: "MenuBarPlexClient",
+    name: "PlexTray",
     platforms: [
         .macOS(.v14),
     ],
     products: [
         .executable(
-            name: "MenuBarPlexClient",
+            name: "PlexTray",
             targets: ["MenuBarPlexClient"]
         ),
     ],

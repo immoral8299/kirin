@@ -33,8 +33,8 @@ final class PlexAuthService: ObservableObject, PlexAuthProviding {
     @Published private(set) var status: PlexAuthStatus = .idle
     @Published private(set) var authToken: String?
 
-    private let clientIdentifier = "menu-bar-plex-client"
-    private let productName = "MenuBarPlexClient"
+    private let clientIdentifier = "plextray"
+    private let productName = "PlexTray"
     private let session: URLSession
     private let keychainStore = KeychainStore()
     private let tokenKey = "plex.auth.token"
