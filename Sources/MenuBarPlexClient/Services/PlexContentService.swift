@@ -1,0 +1,273 @@
+import Foundation
+
+struct PlexContentService {
+    private let client: PlexNetworkClient
+
+    init(client: PlexNetworkClient) {
+        self.client = client
+    }
+
+    func fetchHomeContent(server: PlexServer, library: PlexMusicLibrary, userToken: String, limit: Int = 12) async throws -> PlexHomeContent {
+        let token = server.accessToken ?? userToken
+        let pageQuery = [
+            URLQueryItem(name: "X-Plex-Container-Start", value: "0"),
+            URLQueryItem(name: "X-Plex-Container-Size", value: String(limit)),
+        ]
+
+        let recentlyViewedURL = client.buildURL(
+            base: server.baseURL,
+            path: "library/sections/\(library.id)/recentlyViewed",
+            query: [URLQueryItem(name: "type", value: "9")] + pageQuery
+        )
+
+        let recentlyAddedURL = client.buildURL(
+            base: server.baseURL,
+            path: "library/sections/\(library.id)/recentlyAdded",
+            query: [URLQueryItem(name: "type", value: "9")] + pageQuery
+        )
+
+        let playlistsURL = client.buildURL(
+            base: server.baseURL,
+            path: "playlists",
+            query: [
+                URLQueryItem(name: "playlistType", value: "audio"),
+                URLQueryItem(name: "includeCollections", value: "0"),
+            ] + pageQuery
+        )
+
+        let stationsURL = client.buildURL(
+            base: server.baseURL,
+            path: "hubs/sections/\(library.id)",
+            query: [
+                URLQueryItem(name: "includeStations", value: "1"),
+                URLQueryItem(name: "includeStationDirectories", value: "1"),
+            ]
+        )
+
+        async let recentlyViewedData = client.request(url: recentlyViewedURL, token: token)
+        async let recentlyAddedData = client.request(url: recentlyAddedURL, token: token)
+        async let playlistsData = client.request(url: playlistsURL, token: token)
+        async let stationsData = client.request(url: stationsURL, token: token)
+
+        let recentlyPlayedAlbums = try parseAlbums(data: try await recentlyViewedData, server: server, token: token)
+        let recentlyAddedAlbums = try parseAlbums(data: try await recentlyAddedData, server: server, token: token)
+        let playlists = try parsePlaylists(data: try await playlistsData)
+        let stations = (try? parseStations(data: try await stationsData)) ?? []
+
+        return PlexHomeContent(
+            recentlyPlayedAlbums: recentlyPlayedAlbums,
+            recentlyAddedAlbums: recentlyAddedAlbums,
+            playlists: playlists,
+            stations: stations
+        )
+    }
+
+    func fetchLastPlayedTrack(server: PlexServer, library: PlexMusicLibrary, userToken: String) async throws -> PlexTrack? {
+        let token = server.accessToken ?? userToken
+        let query = [
+            URLQueryItem(name: "type", value: "10"),
+            URLQueryItem(name: "X-Plex-Container-Start", value: "0"),
+            URLQueryItem(name: "X-Plex-Container-Size", value: "1"),
+        ]
+
+        let url = client.buildURL(base: server.baseURL, path: "library/sections/\(library.id)/recentlyViewed", query: query)
+        let data = try await client.request(url: url, token: token)
+        return try parseTracks(data: data, server: server, token: token).first
+    }
+
+    func fetchAlbumTracks(server: PlexServer, album: PlexAlbum, userToken: String) async throws -> [PlexTrack] {
+        let token = server.accessToken ?? userToken
+        let url = client.buildURL(base: server.baseURL, path: "library/metadata/\(album.id)/children")
+        let data = try await client.request(url: url, token: token)
+
+        let tracks = try parseTracks(data: data, server: server, token: token)
+        guard !tracks.isEmpty else {
+            throw PlexAPIError.noTracksInLibrary
+        }
+
+        return tracks
+    }
+
+    func fetchRelatedAlbums(server: PlexServer, albumRatingKey: String, userToken: String, limit: Int = 3) async throws -> [PlexAlbum] {
+        let token = server.accessToken ?? userToken
+        let query = [URLQueryItem(name: "count", value: String(limit))]
+        let url = client.buildURL(base: server.baseURL, path: "hubs/metadata/\(albumRatingKey)", query: query)
+        let data = try await client.request(url: url, token: token)
+        let container = try client.mediaContainer(from: data)
+
+        return deduplicate(nestedObjects(in: container).compactMap { node -> PlexAlbum? in
+            guard node.string(for: ["ratingKey"]) != nil else { return nil }
+            return album(from: node, server: server, token: token)
+        })
+            .filter { $0.id != albumRatingKey }
+            .prefix(limit)
+            .map { $0 }
+    }
+
+    func fetchPlaylistTracks(server: PlexServer, playlist: PlexPlaylist, userToken: String) async throws -> [PlexTrack] {
+        let token = server.accessToken ?? userToken
+        let query = [
+            URLQueryItem(name: "playlistType", value: "audio"),
+            URLQueryItem(name: "includeCollections", value: "0"),
+            URLQueryItem(name: "X-Plex-Container-Start", value: "0"),
+            URLQueryItem(name: "X-Plex-Container-Size", value: "200"),
+        ]
+
+        let url = client.buildURL(base: server.baseURL, path: "playlists/\(playlist.id)/items", query: query)
+        let data = try await client.request(url: url, token: token)
+
+        let tracks = try parseTracks(data: data, server: server, token: token)
+        guard !tracks.isEmpty else {
+            throw PlexAPIError.noTracksInLibrary
+        }
+
+        return tracks
+    }
+
+    // MARK: - Parsing helpers
+
+    func parsePlayQueueTracks(from container: [String: Any], server: PlexServer, token: String?) -> [PlexTrack] {
+        let metadataNodes = container.objectArray(for: ["Metadata", "metadata"])
+
+        return metadataNodes.compactMap { node -> PlexTrack? in
+            let type = node.string(for: ["type"])?.lowercased()
+            if let type, type != "track" {
+                return nil
+            }
+
+            guard let id = node.string(for: ["playQueueItemID", "ratingKey", "key", "id"]) else {
+                return nil
+            }
+
+            guard let streamPart = firstMediaPartPath(from: node) else {
+                return nil
+            }
+
+            let streamURL = streamURL(from: streamPart, server: server, token: token)
+            let artworkPath = node.string(for: ["thumb", "parentThumb", "grandparentThumb", "art"])
+
+            return PlexTrack(
+                id: id,
+                playQueueItemID: node.string(for: ["playQueueItemID"]),
+                ratingKey: node.string(for: ["ratingKey", "key", "id"]),
+                albumRatingKey: node.string(for: ["parentRatingKey"]),
+                durationMilliseconds: node.int(for: ["duration"]),
+                title: node.string(for: ["title"]) ?? "Unknown Track",
+                trackArtist: node.string(for: ["originalTitle", "grandparentTitle"]),
+                albumArtist: node.string(for: ["grandparentTitle", "parentTitle"]),
+                albumName: node.string(for: ["parentTitle"]) ?? "Unknown Album",
+                artworkURL: artworkURL(from: artworkPath, server: server, token: token),
+                trackNumber: node.int(for: ["index"]),
+                discNumber: node.int(for: ["parentIndex"]),
+                streamURL: streamURL
+            )
+        }
+    }
+
+    func parseTracks(data: Data, server: PlexServer, token: String?) throws -> [PlexTrack] {
+        let container = try client.mediaContainer(from: data)
+        let metadataNodes = container.objectArray(for: ["Metadata", "metadata"])
+
+        let tracks = metadataNodes.compactMap { node -> PlexTrack? in
+            let type = node.string(for: ["type"])?.lowercased()
+            if let type, type != "track" {
+                return nil
+            }
+
+            guard let id = node.string(for: ["ratingKey", "key", "id"]) else {
+                return nil
+            }
+
+            guard let streamPart = firstMediaPartPath(from: node) else {
+                return nil
+            }
+
+            let streamURL = streamURL(from: streamPart, server: server, token: token)
+            let artworkPath = node.string(for: ["thumb", "parentThumb", "grandparentThumb", "art"])
+
+            return PlexTrack(
+                id: id,
+                playQueueItemID: nil,
+                ratingKey: node.string(for: ["ratingKey", "key", "id"]),
+                albumRatingKey: node.string(for: ["parentRatingKey"]),
+                durationMilliseconds: node.int(for: ["duration"]),
+                title: node.string(for: ["title"]) ?? "Unknown Track",
+                trackArtist: node.string(for: ["originalTitle", "grandparentTitle"]),
+                albumArtist: node.string(for: ["grandparentTitle", "parentTitle"]),
+                albumName: node.string(for: ["parentTitle"]) ?? "Unknown Album",
+                artworkURL: artworkURL(from: artworkPath, server: server, token: token),
+                trackNumber: node.int(for: ["index"]),
+                discNumber: node.int(for: ["parentIndex"]),
+                streamURL: streamURL
+            )
+        }
+
+        return deduplicate(tracks)
+    }
+
+    private func parseAlbums(data: Data, server: PlexServer, token: String?) throws -> [PlexAlbum] {
+        let container = try client.mediaContainer(from: data)
+        let metadataNodes = container.objectArray(for: ["Metadata", "metadata"])
+
+        let albums = metadataNodes.compactMap { album(from: $0, server: server, token: token) }
+
+        return deduplicate(albums)
+    }
+
+    private func album(from node: [String: Any], server: PlexServer, token: String?) -> PlexAlbum? {
+        guard node.string(for: ["type"])?.lowercased() == "album",
+              let id = node.string(for: ["ratingKey", "key", "id"]) else {
+            return nil
+        }
+
+        let title = node.string(for: ["title"]) ?? "Unknown Album"
+        let artist = node.string(for: ["parentTitle", "grandparentTitle", "originalTitle"]) ?? "Unknown Artist"
+        let artworkPath = node.string(for: ["thumb", "parentThumb", "grandparentThumb", "art"])
+
+        return PlexAlbum(
+            id: id,
+            title: title,
+            artist: artist,
+            artworkURL: artworkURL(from: artworkPath, server: server, token: token)
+        )
+    }
+
+    private func parsePlaylists(data: Data) throws -> [PlexPlaylist] {
+        let container = try client.mediaContainer(from: data)
+        let metadataNodes = container.objectArray(for: ["Metadata", "metadata"])
+
+        let playlists = metadataNodes.compactMap { node -> PlexPlaylist? in
+            guard let id = node.string(for: ["ratingKey", "key", "id"]),
+                  let title = node.string(for: ["title"]) else {
+                return nil
+            }
+
+            let playlistType = node.string(for: ["playlistType", "type"])?.lowercased()
+            if let playlistType, playlistType != "audio", playlistType != "playlist" {
+                return nil
+            }
+
+            let trackCount = node.int(for: ["leafCount"]) ?? 0
+            return PlexPlaylist(id: id, title: title, trackCount: trackCount)
+        }
+
+        return deduplicate(playlists)
+            .sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
+    }
+
+    private func parseStations(data: Data) throws -> [PlexStation] {
+        let container = try client.mediaContainer(from: data)
+        let stations = nestedObjects(in: container).compactMap { node -> PlexStation? in
+            guard let key = node.string(for: ["key"]),
+                  key.contains("/station/") || node.string(for: ["radio"]) == "1",
+                  let title = node.string(for: ["title"]),
+                  !["style radio", "mood radio"].contains(title.lowercased()) else {
+                return nil
+            }
+
+            return PlexStation(id: key, title: title, key: key)
+        }
+
+        return deduplicate(stations)
+    }
+}

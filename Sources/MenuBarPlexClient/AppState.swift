@@ -25,9 +25,9 @@ final class AppState: ObservableObject {
     @Published private(set) var shouldPresentInitialLoadFailure = false
 
     let settingsStore = SettingsStore()
-    let authService = PlexAuthService()
+    let authService: PlexAuthService
 
-    private let apiClient = PlexAPIClient()
+    private let apiClient: PlexService
     private let homeFetchLimit = 12
     private var cancellables = Set<AnyCancellable>()
 
@@ -66,6 +66,8 @@ final class AppState: ObservableObject {
     }
 
     init() {
+        authService = PlexAuthService()
+        apiClient = PlexService(authService: authService)
         bindChildObjects()
 
         if authService.authToken != nil {
