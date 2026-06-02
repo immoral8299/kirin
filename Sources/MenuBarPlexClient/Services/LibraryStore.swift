@@ -298,10 +298,17 @@ final class LibraryStore: ObservableObject {
                 return nil
             }
 
+            let artistArtworkURL: URL?
+            if let server = selectedServer, let token = context.plexService.authService.authToken {
+                artistArtworkURL = plexArtworkURL(from: "/library/metadata/\(id)/thumb", server: server, token: token)
+            } else {
+                artistArtworkURL = nil
+            }
+
             return QueueStationSeed(
                 id: id,
                 title: track.albumArtist ?? track.trackArtist ?? "Unknown Artist",
-                artworkURL: track.artworkURL
+                artworkURL: artistArtworkURL
             )
         }
     }
