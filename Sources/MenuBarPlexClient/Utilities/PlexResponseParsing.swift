@@ -91,9 +91,9 @@ func firstMediaPartPath(from node: [String: Any]) -> String? {
     return path
 }
 
-func plexStreamURL(from path: String, server: PlexServer, token: String?) -> URL {
-    if path.hasPrefix("http://") || path.hasPrefix("https://") {
-        return URL(string: path) ?? server.baseURL
+private func plexResolvedURL(from path: String, server: PlexServer, token: String?) -> URL {
+    if path.hasPrefix("http://") || path.hasPrefix("https://"), let resolved = URL(string: path) {
+        return resolved
     }
 
     let normalizedPath = path.hasPrefix("/") ? String(path.dropFirst()) : path
@@ -113,30 +113,19 @@ func plexStreamURL(from path: String, server: PlexServer, token: String?) -> URL
     return components?.url ?? url
 }
 
-func plexArtworkURL(from artworkPath: String?, server: PlexServer, token: String?) -> URL? {
-    guard let artworkPath else {
-        return nil
+func plexStreamURL(from path: String, server: PlexServer, token: String?) -> URL {
+    if path.hasPrefix("http://") || path.hasPrefix("https://") {
+        return URL(string: path) ?? server.baseURL
     }
+    return plexResolvedURL(from: path, server: server, token: token)
+}
 
+func plexArtworkURL(from artworkPath: String?, server: PlexServer, token: String?) -> URL? {
+    guard let artworkPath else { return nil }
     if artworkPath.hasPrefix("http://") || artworkPath.hasPrefix("https://") {
         return URL(string: artworkPath)
     }
-
-    let normalizedPath = artworkPath.hasPrefix("/") ? String(artworkPath.dropFirst()) : artworkPath
-    var url = server.baseURL
-    for component in normalizedPath.split(separator: "/") {
-        url.appendPathComponent(String(component))
-    }
-
-    guard let token else {
-        return url
-    }
-
-    var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
-    var items = components?.queryItems ?? []
-    items.append(URLQueryItem(name: "X-Plex-Token", value: token))
-    components?.queryItems = items
-    return components?.url ?? url
+    return plexResolvedURL(from: artworkPath, server: server, token: token)
 }
 
 func deduplicate<T: Identifiable>(_ values: [T]) -> [T] where T.ID == String {

@@ -4,6 +4,7 @@ import Foundation
 protocol MediaService: AnyObject {
     var isAuthenticated: Bool { get }
     var authenticatedUsername: String? { get }
+    var authToken: String? { get }
 
     // Auth
     func signIn() async throws

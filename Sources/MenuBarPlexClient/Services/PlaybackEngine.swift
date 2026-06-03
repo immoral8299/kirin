@@ -193,7 +193,7 @@ final class PlaybackEngine: ObservableObject {
         logDebug("Loudness leveling enabled for \(track.title)")
 
         guard let server = context.libraryStore?.selectedServer,
-              let userToken = context.plexService.authService.authToken else {
+              let userToken = context.plexService!.authService.authToken else {
             logDebug("Skipping loudness leveling for \(track.title): missing identifiers")
             return 1.0
         }
@@ -212,7 +212,7 @@ final class PlaybackEngine: ObservableObject {
         }
 
         do {
-            guard let gain = try await context.plexService.fetchLoudnessGain(server: server, ratingKey: ratingKey, userToken: userToken) else {
+            guard let gain = try await context.plexService!.fetchLoudnessGain(server: server, ratingKey: ratingKey, userToken: userToken) else {
                 missingLoudnessAnalysisTrackIDs.insert(ratingKey)
                 logDebug("No loudness analysis found for \(track.title)")
                 return 1.0
@@ -345,8 +345,6 @@ final class PlaybackEngine: ObservableObject {
     }
 
     private func logDebug(_ message: String) {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "HH:mm:ss"
-        print("[\(formatter.string(from: Date()))] \(message)")
+        PlexLog.debug(message, category: .playback)
     }
 }

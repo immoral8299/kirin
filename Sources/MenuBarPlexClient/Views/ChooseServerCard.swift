@@ -42,7 +42,7 @@ struct ChooseServerCard: View {
             }
 
             if let error = libraryStore.libraryLoadError {
-                Text(error)
+                Text(error.message)
                     .font(.system(size: 11, weight: .medium, design: .rounded))
                     .foregroundStyle(.secondary.opacity(0.72))
             }

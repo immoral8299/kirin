@@ -49,6 +49,15 @@ struct PlexNetworkClient {
         return root
     }
 
+    func decodeResponse<T: Decodable>(_ type: T.Type, from data: Data) throws -> T {
+        try JSONDecoder().decode(type, from: data)
+    }
+
+    func decodeContainer<T: Decodable>(_ type: T.Type, from data: Data) throws -> PlexContainer<T> {
+        let response: PlexMediaContainerResponse<T> = try JSONDecoder().decode(PlexMediaContainerResponse.self, from: data)
+        return response.mediaContainer
+    }
+
     func resourceArray(from data: Data) throws -> [[String: Any]] {
         let json = try JSONSerialization.jsonObject(with: data)
 

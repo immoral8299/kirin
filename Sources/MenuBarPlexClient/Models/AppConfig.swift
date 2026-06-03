@@ -109,61 +109,108 @@ enum AppThemePreference: String, CaseIterable, Codable, Identifiable {
     }
 }
 
-struct AppSettings: Codable, Equatable {
+struct DisplaySettings: Codable, Equatable {
     var menuBarFormat: MenuBarFormat
     var sectionVisibility: SectionVisibility
-    var selectedServerID: String?
-    var selectedLibraryID: String?
-    var loudnessLevelingEnabled: Bool
-    var listenedThresholdPercentage: Int
     var themePreference: AppThemePreference
 
+    static let `default` = DisplaySettings(
+        menuBarFormat: .default,
+        sectionVisibility: .default,
+        themePreference: .system
+    )
+}
+
+struct ServerSettings: Codable, Equatable {
+    var selectedServerID: String?
+    var selectedLibraryID: String?
+
+    static let `default` = ServerSettings(
+        selectedServerID: nil,
+        selectedLibraryID: nil
+    )
+}
+
+struct PlaybackSettings: Codable, Equatable {
+    var loudnessLevelingEnabled: Bool
+    var listenedThresholdPercentage: Int
+
+    static let `default` = PlaybackSettings(
+        loudnessLevelingEnabled: false,
+        listenedThresholdPercentage: 90
+    )
+}
+
+struct AppSettings: Codable, Equatable {
+    var display: DisplaySettings
+    var server: ServerSettings
+    var playback: PlaybackSettings
+
     private enum CodingKeys: String, CodingKey {
-        case menuBarFormat
-        case sectionVisibility
-        case selectedServerID
-        case selectedLibraryID
-        case loudnessLevelingEnabled
-        case listenedThresholdPercentage
-        case themePreference
+        case display
+        case server
+        case playback
     }
 
-    init(
-        menuBarFormat: MenuBarFormat,
-        sectionVisibility: SectionVisibility,
-        selectedServerID: String?,
-        selectedLibraryID: String?,
-        loudnessLevelingEnabled: Bool,
-        listenedThresholdPercentage: Int,
-        themePreference: AppThemePreference
-    ) {
-        self.menuBarFormat = menuBarFormat
-        self.sectionVisibility = sectionVisibility
-        self.selectedServerID = selectedServerID
-        self.selectedLibraryID = selectedLibraryID
-        self.loudnessLevelingEnabled = loudnessLevelingEnabled
-        self.listenedThresholdPercentage = listenedThresholdPercentage
-        self.themePreference = themePreference
+    init(display: DisplaySettings, server: ServerSettings, playback: PlaybackSettings) {
+        self.display = display
+        self.server = server
+        self.playback = playback
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        menuBarFormat = try container.decode(MenuBarFormat.self, forKey: .menuBarFormat)
-        sectionVisibility = try container.decode(SectionVisibility.self, forKey: .sectionVisibility)
-        selectedServerID = try container.decodeIfPresent(String.self, forKey: .selectedServerID)
-        selectedLibraryID = try container.decodeIfPresent(String.self, forKey: .selectedLibraryID)
-        loudnessLevelingEnabled = try container.decodeIfPresent(Bool.self, forKey: .loudnessLevelingEnabled) ?? false
-        listenedThresholdPercentage = min(max(try container.decodeIfPresent(Int.self, forKey: .listenedThresholdPercentage) ?? 90, 50), 100)
-        themePreference = try container.decodeIfPresent(AppThemePreference.self, forKey: .themePreference) ?? .system
+        if let display = try? container.decode(DisplaySettings.self, forKey: .display) {
+            self.display = display
+        } else {
+            self.display = DisplaySettings(
+                menuBarFormat: try container.decodeIfPresent(MenuBarFormat.self, forKey: .display)
+                    ?? .default,
+                sectionVisibility: try container.decodeIfPresent(SectionVisibility.self, forKey: .display)
+                    ?? .default,
+                themePreference: try container.decodeIfPresent(AppThemePreference.self, forKey: .display)
+                    ?? .system
+            )
+        }
+        self.server = try container.decodeIfPresent(ServerSettings.self, forKey: .server) ?? .default
+        self.playback = try container.decodeIfPresent(PlaybackSettings.self, forKey: .playback) ?? .default
     }
 
     static let `default` = AppSettings(
-        menuBarFormat: .default,
-        sectionVisibility: .default,
-        selectedServerID: nil,
-        selectedLibraryID: nil,
-        loudnessLevelingEnabled: false,
-        listenedThresholdPercentage: 90,
-        themePreference: .system
+        display: .default,
+        server: .default,
+        playback: .default
     )
+}
+
+// Backward-compatible property forwarding
+extension AppSettings {
+    var menuBarFormat: MenuBarFormat {
+        get { display.menuBarFormat }
+        set { display.menuBarFormat = newValue }
+    }
+    var sectionVisibility: SectionVisibility {
+        get { display.sectionVisibility }
+        set { display.sectionVisibility = newValue }
+    }
+    var themePreference: AppThemePreference {
+        get { display.themePreference }
+        set { display.themePreference = newValue }
+    }
+    var selectedServerID: String? {
+        get { server.selectedServerID }
+        set { server.selectedServerID = newValue }
+    }
+    var selectedLibraryID: String? {
+        get { server.selectedLibraryID }
+        set { server.selectedLibraryID = newValue }
+    }
+    var loudnessLevelingEnabled: Bool {
+        get { playback.loudnessLevelingEnabled }
+        set { playback.loudnessLevelingEnabled = newValue }
+    }
+    var listenedThresholdPercentage: Int {
+        get { playback.listenedThresholdPercentage }
+        set { playback.listenedThresholdPercentage = newValue }
+    }
 }

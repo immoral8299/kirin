@@ -9,11 +9,12 @@ final class PlexService: MediaService {
     private let queue: PlexPlayQueueService
     private let timeline: PlexTimelineService
     private let loudness: PlexLoudnessService
-    let authService: PlexAuthService
+    let authService: any PlexAuthProviding
 
     // MARK: - Auth state
 
     var isAuthenticated: Bool { authService.authToken != nil }
+    var authToken: String? { authService.authToken }
     var authenticatedUsername: String? {
         guard case let .authenticated(username) = authService.status.state else { return nil }
         return username
@@ -61,7 +62,7 @@ final class PlexService: MediaService {
 
     // MARK: - Init
 
-    init(session: URLSession = .shared, authService: PlexAuthService? = nil) {
+    init(session: URLSession = .shared, authService: (any PlexAuthProviding)? = nil) {
         let networkClient = PlexNetworkClient(session: session)
         self.networkClient = networkClient
         self.discovery = PlexServerDiscoveryService(client: networkClient)

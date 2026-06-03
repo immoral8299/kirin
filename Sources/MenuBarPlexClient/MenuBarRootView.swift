@@ -11,6 +11,7 @@ enum MenuBarLayout {
     static let contentWidth: CGFloat = 436
     static let popupWidth: CGFloat = 460
     static let minPopupHeight: CGFloat = 400
+    static let carouselPageSize = 4
 }
 
 private enum ContentTab {
@@ -235,6 +236,68 @@ private struct AuthenticatedContent: View {
     }
 
     @ViewBuilder
+    private func recoveryButton(for action: LibraryLoadError.RecoveryAction) -> some View {
+        switch action {
+        case .retry:
+            Button(action: appState.refreshCurrentLibraryContent) {
+                HStack(spacing: 4) {
+                    Image(systemName: "arrow.clockwise")
+                    Text("Retry")
+                }
+                .font(.system(size: 10, weight: .semibold, design: .rounded))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(AppTheme.overlayMedium, in: RoundedRectangle(cornerRadius: AppCornerRadius.compact, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .focusable(false)
+            .interactiveCursor()
+        case .serverSelection:
+            Button(action: appState.refreshServersAndLibraries) {
+                HStack(spacing: 4) {
+                    Image(systemName: "externaldrive")
+                    Text("Select Server")
+                }
+                .font(.system(size: 10, weight: .semibold, design: .rounded))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(AppTheme.overlayMedium, in: RoundedRectangle(cornerRadius: AppCornerRadius.compact, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .focusable(false)
+            .interactiveCursor()
+        case .reauthenticate:
+            Button(action: appState.beginPlexLogin) {
+                HStack(spacing: 4) {
+                    Image(systemName: "person.circle")
+                    Text("Re-authenticate")
+                }
+                .font(.system(size: 10, weight: .semibold, design: .rounded))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(AppTheme.overlayMedium, in: RoundedRectangle(cornerRadius: AppCornerRadius.compact, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .focusable(false)
+            .interactiveCursor()
+        case .dismiss:
+            Button(action: appState.dismissLibraryLoadError) {
+                HStack(spacing: 4) {
+                    Image(systemName: "xmark")
+                    Text("Dismiss")
+                }
+                .font(.system(size: 10, weight: .semibold, design: .rounded))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(AppTheme.overlayMedium, in: RoundedRectangle(cornerRadius: AppCornerRadius.compact, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .focusable(false)
+            .interactiveCursor()
+        }
+    }
+
+    @ViewBuilder
     private var connectionBanner: some View {
         if libraryStore.isLoadingLibrary, !libraryStore.hasExistingContent {
             VStack(alignment: .leading, spacing: 8) {
@@ -256,22 +319,31 @@ private struct AuthenticatedContent: View {
             .frame(width: MenuBarLayout.contentWidth, alignment: .leading)
             .background(AppTheme.overlaySoft, in: RoundedRectangle(cornerRadius: AppCornerRadius.small, style: .continuous))
         } else if let error = libraryStore.libraryLoadError {
-            HStack(spacing: 8) {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .foregroundStyle(.yellow)
-                Text(error)
-                    .font(.system(size: 11, weight: .medium, design: .rounded))
-                    .lineLimit(2)
-                Spacer()
-                Button(action: appState.dismissLibraryLoadError) {
-                    Image(systemName: "xmark")
-                        .padding(4)
-                        .contentShape(Rectangle())
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.yellow)
+                    Text(error.message)
+                        .font(.system(size: 11, weight: .medium, design: .rounded))
+                        .lineLimit(2)
+                    Spacer()
+                    Button(action: appState.dismissLibraryLoadError) {
+                        Image(systemName: "xmark")
+                            .padding(4)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .focusable(false)
+                    .interactiveCursor()
+                    .foregroundStyle(.secondary.opacity(0.72))
                 }
-                .buttonStyle(.plain)
-                .focusable(false)
-                .interactiveCursor()
-                .foregroundStyle(.secondary.opacity(0.72))
+                if !error.recoveryActions.isEmpty {
+                    HStack(spacing: 6) {
+                        ForEach(error.recoveryActions, id: \.self) { action in
+                            recoveryButton(for: action)
+                        }
+                    }
+                }
             }
             .padding(8)
             .frame(width: MenuBarLayout.contentWidth, alignment: .leading)
@@ -327,19 +399,10 @@ private struct HomeContent: View {
 
         VStack(spacing: 14) {
             if visibility.showRecentlyPlayedAlbums && !libraryStore.recentlyPlayedAlbums.isEmpty {
-                AlbumCarouselSection(title: "Recently Played", items: libraryStore.recentlyPlayedAlbums, pageSize: 4, sectionID: "recently-played", pendingPlaybackID: queueManager.pendingPlaybackID, pendingPlaybackSource: queueManager.pendingPlaybackSource, onSelect: { appState.playAlbum($0, source: "recently-played") }, onPlayNext: { appState.enqueueAlbum($0, playNext: true) }, onAddToQueue: { appState.enqueueAlbum($0, playNext: false) })
-                    .transition(.opacity)
-            }
-            if visibility.showRecentlyAddedAlbums && !libraryStore.recentlyAddedAlbums.isEmpty {
-                AlbumCarouselSection(title: "Recently Added", items: libraryStore.recentlyAddedAlbums, pageSize: 4, sectionID: "recently-added", pendingPlaybackID: queueManager.pendingPlaybackID, pendingPlaybackSource: queueManager.pendingPlaybackSource, onSelect: { appState.playAlbum($0, source: "recently-added") }, onPlayNext: { appState.enqueueAlbum($0, playNext: true) }, onAddToQueue: { appState.enqueueAlbum($0, playNext: false) })
-                    .transition(.opacity)
-            }
-            if visibility.showPlaylists && !libraryStore.playlists.isEmpty {
-                PlaylistCarouselSection(title: "Playlists", items: libraryStore.playlists, pageSize: 4, pendingPlaybackID: queueManager.pendingPlaybackID, onSelect: appState.playPlaylist, onPlayNext: { appState.enqueuePlaylist($0, playNext: true) }, onAddToQueue: { appState.enqueuePlaylist($0, playNext: false) })
-                    .transition(.opacity)
-            }
-            if visibility.showStations && !libraryStore.stations.isEmpty {
-                StationCarouselSection(title: "Stations", items: libraryStore.stations, pageSize: 4, pendingPlaybackID: queueManager.pendingPlaybackID, onSelect: appState.playStation, onPlayNext: { appState.enqueueStation($0, playNext: true) }, onAddToQueue: { appState.enqueueStation($0, playNext: false) })
+                AlbumCarouselSection(title: "Recently Played", items: libraryStore.recentlyPlayedAlbums, pageSize: MenuBarLayout.carouselPageSize, sectionID: "recently-played", pendingPlaybackID: queueManager.pendingPlaybackID, pendingPlaybackSource: queueManager.pendingPlaybackSource, onSelect: { appState.playAlbum($0, source: "recently-played") }, onPlayNext: { appState.enqueueAlbum($0, playNext: true) }, onAddToQueue: { appState.enqueueAlbum($0, playNext: false) })
+                AlbumCarouselSection(title: "Recently Added", items: libraryStore.recentlyAddedAlbums, pageSize: MenuBarLayout.carouselPageSize, sectionID: "recently-added", pendingPlaybackID: queueManager.pendingPlaybackID, pendingPlaybackSource: queueManager.pendingPlaybackSource, onSelect: { appState.playAlbum($0, source: "recently-added") }, onPlayNext: { appState.enqueueAlbum($0, playNext: true) }, onAddToQueue: { appState.enqueueAlbum($0, playNext: false) })
+                PlaylistCarouselSection(title: "Playlists", items: libraryStore.playlists, pageSize: MenuBarLayout.carouselPageSize, pendingPlaybackID: queueManager.pendingPlaybackID, onSelect: appState.playPlaylist, onPlayNext: { appState.enqueuePlaylist($0, playNext: true) }, onAddToQueue: { appState.enqueuePlaylist($0, playNext: false) })
+                StationCarouselSection(title: "Stations", items: libraryStore.stations, pageSize: MenuBarLayout.carouselPageSize, pendingPlaybackID: queueManager.pendingPlaybackID, onSelect: appState.playStation, onPlayNext: { appState.enqueueStation($0, playNext: true) }, onAddToQueue: { appState.enqueueStation($0, playNext: false) })
                     .transition(.opacity)
             }
             if !libraryStore.isLoadingLibrary,

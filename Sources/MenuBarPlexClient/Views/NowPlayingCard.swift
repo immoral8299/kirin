@@ -62,7 +62,7 @@ struct NowPlayingCard: View, Equatable {
                     HStack(spacing: 16) {
                         transportButton(icon: "backward.fill", action: onPrevious)
                         transportButton(
-                            icon: playbackState.actionSystemImageName,
+                            icon: PlaybackStateIcon.actionSystemImageName(for: playbackState),
                             showsProgress: playbackState == .buffering,
                             action: onPlayPause
                         )

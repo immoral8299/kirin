@@ -7,7 +7,12 @@ final class TimelineTracker {
     private var hasMarkedTrackedTrackListened = false
     private var periodicReportingTask: Task<Void, Never>?
     private var timelineRequestTask: Task<Void, Never>?
-    private let timelineReportInterval: TimeInterval = 10
+    private enum TimelineConfiguration {
+        static let reportInterval: TimeInterval = 10
+        static let initialListenedThreshold = 90
+        static let minListenedThreshold = 50
+        static let maxListenedThreshold = 100
+    }
 
     var listenedThresholdPercentage: Int {
         context.settingsStore.settings.listenedThresholdPercentage
@@ -18,7 +23,7 @@ final class TimelineTracker {
     }
 
     func setListenedThresholdPercentage(_ percentage: Int) {
-        context.settingsStore.settings.listenedThresholdPercentage = min(max(percentage, 50), 100)
+        context.settingsStore.settings.listenedThresholdPercentage = min(max(percentage, TimelineConfiguration.minListenedThreshold), TimelineConfiguration.maxListenedThreshold)
         markTrackedTrackListenedIfNeeded()
     }
 
@@ -58,7 +63,7 @@ final class TimelineTracker {
         reportTrackedPlaybackTimeline(state: .playing)
         periodicReportingTask = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(self?.timelineReportInterval ?? 10))
+                try? await Task.sleep(for: .seconds(TimelineConfiguration.reportInterval))
                 guard !Task.isCancelled else { return }
                 self?.reportTrackedPlaybackTimeline(state: .playing)
             }
@@ -67,9 +72,7 @@ final class TimelineTracker {
 
     func reportTrackedPlaybackTimeline(state: PlaybackState) {
         guard let track = trackedTrack,
-              let ratingKey = track.ratingKey,
-              let server = context.libraryStore?.selectedServer,
-              let userToken = context.plexService.authService.authToken else {
+              let ratingKey = track.ratingKey else {
             return
         }
 
@@ -80,15 +83,13 @@ final class TimelineTracker {
             await previousTimelineRequestTask?.value
 
             do {
-                try await context.plexService.reportPlaybackTimeline(
-                    server: server,
+                try await context.mediaService.reportPlaybackTimeline(
                     ratingKey: ratingKey,
                     playQueueID: context.queueManager?.hasEditablePlayQueue == true ? 0 : nil,
                     playQueueItemID: track.playQueueItemID,
                     state: state,
                     positionMilliseconds: positionMilliseconds,
-                    durationMilliseconds: durationMilliseconds,
-                    userToken: userToken
+                    durationMilliseconds: durationMilliseconds
                 )
             } catch {
                 logDebug("Timeline update failed for \(track.title): \(error.localizedDescription)")
@@ -99,9 +100,7 @@ final class TimelineTracker {
     func markTrackedTrackListenedIfNeeded(force: Bool = false) {
         guard !hasMarkedTrackedTrackListened,
               let track = trackedTrack,
-              let ratingKey = track.ratingKey,
-              let server = context.libraryStore?.selectedServer,
-              let userToken = context.plexService.authService.authToken else {
+              let ratingKey = track.ratingKey else {
             return
         }
 
@@ -115,7 +114,7 @@ final class TimelineTracker {
         hasMarkedTrackedTrackListened = true
         Task {
             do {
-                try await context.plexService.markTrackListened(server: server, ratingKey: ratingKey, userToken: userToken)
+                try await context.mediaService.markTrackListened(ratingKey: ratingKey)
                 logDebug("Marked \(track.title) listened at \(Int(listenedPercentage.rounded()))%")
             } catch {
                 if trackedTrack?.id == track.id {
@@ -139,8 +138,6 @@ final class TimelineTracker {
     }
 
     private func logDebug(_ message: String) {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "HH:mm:ss"
-        print("[\(formatter.string(from: Date()))] \(message)")
+        PlexLog.debug(message, category: .timeline)
     }
 }

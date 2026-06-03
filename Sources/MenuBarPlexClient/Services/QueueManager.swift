@@ -69,11 +69,11 @@ final class QueueManager: ObservableObject {
             activePlaybackSource = .playlist(playlist)
             await playServerQueueSelection(named: playlist.title) {
                 guard let server = self.context.libraryStore?.selectedServer,
-                      let userToken = self.context.plexService.authService.authToken else {
+                      let userToken = self.context.plexService!.authService.authToken else {
                     throw PlexAPIError.noReachableServer
                 }
 
-                return try await self.context.plexService.createPlaylistPlayQueue(
+                return try await self.context.plexService!.createPlaylistPlayQueue(
                     server: server,
                     playlist: playlist,
                     userToken: userToken,
@@ -91,11 +91,11 @@ final class QueueManager: ObservableObject {
             activePlaybackSource = .station(station)
             await playServerQueueSelection(named: station.title) {
                 guard let server = self.context.libraryStore?.selectedServer,
-                      let userToken = self.context.plexService.authService.authToken else {
+                      let userToken = self.context.plexService!.authService.authToken else {
                     throw PlexAPIError.noReachableServer
                 }
 
-                return try await self.context.plexService.createStationPlayQueue(
+                return try await self.context.plexService!.createStationPlayQueue(
                     server: server,
                     station: station,
                     userToken: userToken
@@ -110,7 +110,7 @@ final class QueueManager: ObservableObject {
     func enqueueAlbum(_ album: PlexAlbum, playNext: Bool) {
         guard let library = self.context.libraryStore?.selectedLibrary else { return }
         enqueue(fallback: { self.playAlbum(album) }) { server, playQueue, userToken in
-            try await self.context.plexService.addAlbumToPlayQueue(
+            try await self.context.plexService!.addAlbumToPlayQueue(
                 server: server,
                 library: library,
                 album: album,
@@ -123,7 +123,7 @@ final class QueueManager: ObservableObject {
 
     func enqueuePlaylist(_ playlist: PlexPlaylist, playNext: Bool) {
         enqueue(fallback: { self.playPlaylist(playlist) }) { server, playQueue, userToken in
-            try await self.context.plexService.addPlaylistToPlayQueue(
+            try await self.context.plexService!.addPlaylistToPlayQueue(
                 server: server,
                 playlist: playlist,
                 playQueueID: playQueue.id,
@@ -135,7 +135,7 @@ final class QueueManager: ObservableObject {
 
     func enqueueStation(_ station: PlexStation, playNext: Bool) {
         enqueue(fallback: { self.playStation(station) }) { server, playQueue, userToken in
-            try await self.context.plexService.addStationToPlayQueue(
+            try await self.context.plexService!.addStationToPlayQueue(
                 server: server,
                 station: station,
                 playQueueID: playQueue.id,
@@ -155,11 +155,11 @@ final class QueueManager: ObservableObject {
                 activePlaybackSource = .station(station)
                 await playServerQueueSelection(named: station.title) {
                     guard let server = self.context.libraryStore?.selectedServer,
-                          let userToken = self.context.plexService.authService.authToken else {
+                          let userToken = self.context.plexService!.authService.authToken else {
                         throw PlexAPIError.noReachableServer
                     }
 
-                    return try await self.context.plexService.createStationPlayQueue(
+                    return try await self.context.plexService!.createStationPlayQueue(
                         server: server,
                         station: station,
                         userToken: userToken
@@ -189,20 +189,20 @@ final class QueueManager: ObservableObject {
                 guard let station = recommendation.station else {
                     throw PlexAPIError.invalidResponse
                 }
-                tracks = try await self.context.plexService.createStationPlayQueue(
+                tracks = try await self.context.plexService!.createStationPlayQueue(
                     server: server,
                     station: station,
                     userToken: userToken
                 ).tracks
             case .album:
-                tracks = try await self.context.plexService.fetchAlbumRadioTracks(
+                tracks = try await self.context.plexService!.fetchAlbumRadioTracks(
                     server: server,
                     albumRatingKey: recommendation.seedID,
                     userToken: userToken
                 )
             }
 
-            return try await self.context.plexService.addTracksToPlayQueue(
+            return try await self.context.plexService!.addTracksToPlayQueue(
                 server: server,
                 library: library,
                 tracks: tracks,
@@ -230,11 +230,11 @@ final class QueueManager: ObservableObject {
         guard let playQueue = activeServerPlayQueue else { return }
         performQueueOperation {
             guard let server = self.context.libraryStore?.selectedServer,
-                  let userToken = self.context.plexService.authService.authToken else {
+                  let userToken = self.context.plexService!.authService.authToken else {
                 throw PlexAPIError.noReachableServer
             }
 
-            return try await self.context.plexService.refreshPlayQueue(
+            return try await self.context.plexService!.refreshPlayQueue(
                 server: server,
                 playQueueID: playQueue.id,
                 itemCount: playQueue.itemCount,
@@ -253,11 +253,11 @@ final class QueueManager: ObservableObject {
         performQueueOperation {
             guard let playQueue = self.activeServerPlayQueue,
                   let server = self.context.libraryStore?.selectedServer,
-                  let userToken = self.context.plexService.authService.authToken else {
+                  let userToken = self.context.plexService!.authService.authToken else {
                 throw PlexAPIError.noReachableServer
             }
 
-            return try await self.context.plexService.removePlayQueueItem(
+            return try await self.context.plexService!.removePlayQueueItem(
                 server: server,
                 playQueueID: playQueue.id,
                 playQueueItemID: playQueueItemID,
@@ -284,11 +284,11 @@ final class QueueManager: ObservableObject {
 
         performQueueOperation {
             guard let server = self.context.libraryStore?.selectedServer,
-                  let userToken = self.context.plexService.authService.authToken else {
+                  let userToken = self.context.plexService!.authService.authToken else {
                 throw PlexAPIError.noReachableServer
             }
 
-            return try await self.context.plexService.movePlayQueueItem(
+            return try await self.context.plexService!.movePlayQueueItem(
                 server: server,
                 playQueueID: playQueue.id,
                 playQueueItemID: sourceItemID,
@@ -303,7 +303,7 @@ final class QueueManager: ObservableObject {
         guard let currentTrack,
               let currentIdx = playbackQueue.firstIndex(where: { $0.id == currentTrack.id }),
               let server = self.context.libraryStore?.selectedServer,
-              let userToken = self.context.plexService.authService.authToken,
+              let userToken = self.context.plexService!.authService.authToken,
               let playQueue = activeServerPlayQueue else {
             return
         }
@@ -337,7 +337,7 @@ final class QueueManager: ObservableObject {
         isQueueOperationInProgress = true
         Task {
             do {
-                try await self.context.plexService.clearPlayQueue(
+                try await self.context.plexService!.clearPlayQueue(
                     server: server,
                     playQueueID: playQueue.id,
                     userToken: userToken
@@ -363,7 +363,7 @@ final class QueueManager: ObservableObject {
 
         if let activeServerPlayQueue,
            let server = self.context.libraryStore?.selectedServer,
-           let userToken = self.context.plexService.authService.authToken {
+           let userToken = self.context.plexService!.authService.authToken {
             let shuffleEnabled = isShuffleEnabled
             let currentTrackID = currentTrack?.id
 
@@ -383,7 +383,7 @@ final class QueueManager: ObservableObject {
            isShuffleEnabled,
            orderedPlaybackQueue.count >= 20,
            let server = self.context.libraryStore?.selectedServer,
-           let userToken = self.context.plexService.authService.authToken,
+           let userToken = self.context.plexService!.authService.authToken,
            let currentTrackRatingKey = currentTrack?.ratingKey {
             Task {
                 await adoptServerQueueForAlbumShuffle(
@@ -476,16 +476,16 @@ final class QueueManager: ObservableObject {
         await playServerQueueSelection(named: recommendation.title) {
             guard let server = self.context.libraryStore?.selectedServer,
                   let library = self.context.libraryStore?.selectedLibrary,
-                  let userToken = self.context.plexService.authService.authToken else {
+                  let userToken = self.context.plexService!.authService.authToken else {
                 throw PlexAPIError.noReachableServer
             }
 
-            let tracks = try await self.context.plexService.fetchAlbumRadioTracks(
+            let tracks = try await self.context.plexService!.fetchAlbumRadioTracks(
                 server: server,
                 albumRatingKey: recommendation.seedID,
                 userToken: userToken
             )
-            return try await self.context.plexService.createTrackListPlayQueue(
+            return try await self.context.plexService!.createTrackListPlayQueue(
                 server: server,
                 library: library,
                 tracks: tracks,
@@ -500,11 +500,11 @@ final class QueueManager: ObservableObject {
 
         await playSelection(named: album.title) {
             guard let server = self.context.libraryStore?.selectedServer,
-                  let userToken = self.context.plexService.authService.authToken else {
+                  let userToken = self.context.plexService!.authService.authToken else {
                 throw PlexAPIError.noReachableServer
             }
 
-            let tracks = try await self.context.plexService.fetchAlbumTracks(server: server, album: album, userToken: userToken)
+            let tracks = try await self.context.plexService!.fetchAlbumTracks(server: server, album: album, userToken: userToken)
             guard let startingTrackRatingKey = tracks.first?.ratingKey else {
                 return tracks
             }
@@ -529,7 +529,7 @@ final class QueueManager: ObservableObject {
         startingTrackRatingKey: String
     ) async throws -> [PlexTrack] {
         do {
-            let snapshot = try await self.context.plexService.createAlbumPlayQueue(
+            let snapshot = try await self.context.plexService!.createAlbumPlayQueue(
                 server: server,
                 library: library,
                 album: album,
@@ -568,7 +568,7 @@ final class QueueManager: ObservableObject {
             logDebug("Now playing \(self.context.playbackEngine?.nowPlaying.trackName ?? "")")
         } catch is AlbumServerQueuePlaybackHandled {
         } catch {
-            self.context.libraryStore?.libraryLoadError = error.localizedDescription
+            self.context.libraryStore?.libraryLoadError = LibraryLoadError(error)
             logDebug("Playback load failed: \(error.localizedDescription)")
         }
 
@@ -587,7 +587,7 @@ final class QueueManager: ObservableObject {
             await playCurrentTrack()
             logDebug("Now playing \(self.context.playbackEngine?.nowPlaying.trackName ?? "")")
         } catch {
-            self.context.libraryStore?.libraryLoadError = error.localizedDescription
+            self.context.libraryStore?.libraryLoadError = LibraryLoadError(error)
             logDebug("Playback load failed: \(error.localizedDescription)")
         }
 
@@ -658,7 +658,7 @@ final class QueueManager: ObservableObject {
     private func refreshServerQueueAfterPlaybackAdvance() async {
         guard let playQueue = activeServerPlayQueue,
               let server = self.context.libraryStore?.selectedServer,
-              let userToken = self.context.plexService.authService.authToken else {
+              let userToken = self.context.plexService!.authService.authToken else {
             return
         }
 
@@ -667,7 +667,7 @@ final class QueueManager: ObservableObject {
         try? await Task.sleep(for: .milliseconds(300))
 
         do {
-            let snapshot = try await self.context.plexService.refreshPlayQueue(
+            let snapshot = try await self.context.plexService!.refreshPlayQueue(
                 server: server,
                 playQueueID: playQueue.id,
                 itemCount: playQueue.itemCount,
@@ -691,7 +691,7 @@ final class QueueManager: ObservableObject {
 
         performQueueOperation {
             guard let server = self.context.libraryStore?.selectedServer,
-                  let userToken = self.context.plexService.authService.authToken else {
+                  let userToken = self.context.plexService!.authService.authToken else {
                 throw PlexAPIError.noReachableServer
             }
 
@@ -719,14 +719,14 @@ final class QueueManager: ObservableObject {
         do {
             let snapshot = try await {
                 if enabled {
-                    return try await self.context.plexService.shufflePlayQueue(
+                    return try await self.context.plexService!.shufflePlayQueue(
                         server: server,
                         playQueueID: playQueue.id,
                         itemCount: playQueue.itemCount,
                         userToken: userToken
                     )
                 }
-                return try await self.context.plexService.unshufflePlayQueue(
+                return try await self.context.plexService!.unshufflePlayQueue(
                     server: server,
                     playQueueID: playQueue.id,
                     itemCount: playQueue.itemCount,
@@ -751,7 +751,7 @@ final class QueueManager: ObservableObject {
         keepingTrackID: String?
     ) async {
         do {
-            let snapshot = try await self.context.plexService.createAlbumPlayQueue(
+            let snapshot = try await self.context.plexService!.createAlbumPlayQueue(
                 server: server,
                 library: library,
                 album: album,
@@ -769,8 +769,6 @@ final class QueueManager: ObservableObject {
     }
 
     private func logDebug(_ message: String) {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "HH:mm:ss"
-        print("[\(formatter.string(from: Date()))] \(message)")
+        PlexLog.debug(message, category: .queue)
     }
 }

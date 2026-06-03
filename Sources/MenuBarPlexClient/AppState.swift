@@ -27,7 +27,7 @@ final class AppState {
     var playlists: [PlexPlaylist] { libraryStore.playlists }
     var stations: [PlexStation] { libraryStore.stations }
     var isLoadingLibrary: Bool { libraryStore.isLoadingLibrary }
-    var libraryLoadError: String? { libraryStore.libraryLoadError }
+    var libraryLoadError: LibraryLoadError? { libraryStore.libraryLoadError }
     var availableServers: [PlexServer] { libraryStore.availableServers }
     var availableLibraries: [PlexMusicLibrary] { libraryStore.availableLibraries }
     var currentLoadingMessage: String? { libraryStore.currentLoadingMessage }
@@ -41,7 +41,7 @@ final class AppState {
     init() {
         authService = PlexAuthService()
         apiClient = PlexService(authService: authService)
-        context = StoreContext(plexService: apiClient, settingsStore: settingsStore)
+        context = StoreContext(mediaService: apiClient, settingsStore: settingsStore)
         libraryStore = LibraryStore(context: context)
         playbackEngine = PlaybackEngine(context: context)
         queueManager = QueueManager(context: context)
@@ -104,9 +104,9 @@ final class AppState {
     var statusIconName: String {
         if !shouldPreserveNowPlayingStatus,
            isShowingTransientStatus {
-            return PlaybackState.buffering.statusSystemImageName
+            return PlaybackStateIcon.statusSystemImageName(for: .buffering)
         }
-        return playbackState.statusSystemImageName
+        return PlaybackStateIcon.statusSystemImageName(for: playbackState)
     }
 
     private var transientStatusLine: String? {
@@ -124,7 +124,7 @@ final class AppState {
                 return currentLoadingStatusLine
             }
             if let libraryLoadError {
-                return libraryLoadError
+                return libraryLoadError.message
             }
             return nil
         }
@@ -171,7 +171,7 @@ final class AppState {
         libraryStore.recentlyAddedAlbums = []
         libraryStore.playlists = []
         libraryStore.stations = []
-        libraryStore.libraryLoadError = nil
+        libraryStore.dismissLibraryLoadError()
         libraryStore.currentLoadingMessage = nil
         libraryStore.shouldPresentInitialLoadFailure = false
         playbackEngine.clearCaches()

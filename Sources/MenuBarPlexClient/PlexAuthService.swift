@@ -24,8 +24,18 @@ struct PlexPinCheckResponse: Decodable {
     let authToken: String?
 }
 
-protocol PlexAuthProviding {
+struct PlexUserResponse: Decodable {
+    let username: String?
+    let title: String?
+}
+
+@MainActor
+protocol PlexAuthProviding: AnyObject, ObservableObject {
+    var authToken: String? { get }
+    var status: PlexAuthStatus { get }
     func beginLogin() async
+    func signOut()
+    func reopenBrowser()
 }
 
 @MainActor
@@ -45,6 +55,9 @@ final class PlexAuthService: ObservableObject, PlexAuthProviding {
 
         if authToken != nil {
             status = PlexAuthStatus(state: .authenticated(username: "Plex User"))
+            Task {
+                await refreshDisplayName()
+            }
         }
     }
 
@@ -65,6 +78,7 @@ final class PlexAuthService: ObservableObject, PlexAuthProviding {
             authToken = token
             keychainStore.save(token, key: tokenKey)
             status = PlexAuthStatus(state: .authenticated(username: "Plex User"))
+            await refreshDisplayName()
         } catch {
             status = PlexAuthStatus(state: .failed(message: error.localizedDescription))
         }
@@ -130,6 +144,32 @@ final class PlexAuthService: ObservableObject, PlexAuthProviding {
 
         let (data, _) = try await session.data(for: request)
         return try JSONDecoder().decode(PlexPinCheckResponse.self, from: data)
+    }
+
+    private func refreshDisplayName() async {
+        guard let token = authToken else { return }
+
+        do {
+            if let username = try await fetchCurrentUsername(token: token) {
+                status = PlexAuthStatus(state: .authenticated(username: username))
+            }
+        } catch {
+            print("[PlexAuthService] Failed to fetch username: \(error.localizedDescription)")
+        }
+    }
+
+    private func fetchCurrentUsername(token: String) async throws -> String? {
+        guard let url = URL(string: "https://plex.tv/api/v2/user") else { return nil }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue(token, forHTTPHeaderField: "X-Plex-Token")
+        applyPlexHeaders(to: &request)
+
+        let (data, _) = try await session.data(for: request)
+        let user = try JSONDecoder().decode(PlexUserResponse.self, from: data)
+        return user.username ?? user.title
     }
 
     private func openInBrowser(_ url: URL) {
