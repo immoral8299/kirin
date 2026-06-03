@@ -3,10 +3,10 @@ import Foundation
 
 @MainActor
 final class LibraryStore: ObservableObject {
-    @Published var recentlyPlayedAlbums: [PlexAlbum] = []
-    @Published var recentlyAddedAlbums: [PlexAlbum] = []
-    @Published var playlists: [PlexPlaylist] = []
-    @Published var stations: [PlexStation] = []
+    @Published var recentlyPlayedAlbums: [MediaAlbum] = []
+    @Published var recentlyAddedAlbums: [MediaAlbum] = []
+    @Published var playlists: [MediaPlaylist] = []
+    @Published var stations: [MediaStation] = []
     @Published var isLoadingLibrary = false {
         didSet {
             if !isLoadingLibrary, oldValue, libraryLoadError == nil,
@@ -18,21 +18,21 @@ final class LibraryStore: ObservableObject {
         }
     }
     @Published var libraryLoadError: LibraryLoadError?
-    @Published var availableServers: [PlexServer] = []
-    @Published var availableLibraries: [PlexMusicLibrary] = []
+    @Published var availableServers: [MediaServer] = []
+    @Published var availableLibraries: [MediaMusicLibrary] = []
     @Published var currentLoadingMessage: String?
     @Published var shouldPresentInitialLoadFailure = false
-    @Published var relatedAlbums: [PlexAlbum] = []
+    @Published var relatedAlbums: [MediaAlbum] = []
     @Published var queueStationRecommendations: [PlexStationRecommendation] = []
 
     private let context: StoreContext
     private var relatedAlbumsTask: Task<Void, Never>?
-    private var relatedAlbumsRatingKey: String?
+    private var relatedAlbumsTrackID: String?
     private var queueStationRecommendationsTask: Task<Void, Never>?
     private var queueStationRecommendationSeedIDs: [String] = []
     private var queueStationRecommendationsGeneration = 0
 
-    private var plexService: PlexService { context.plexService! }
+    private var plexService: PlexService? { context.plexService }
 
     init(context: StoreContext) {
         self.context = context
@@ -47,11 +47,23 @@ final class LibraryStore: ObservableObject {
     }
 
     var selectedServerName: String? {
-        selectedServer?.name
+        if let server = selectedPlexServer {
+            return server.name
+        }
+        if context.mediaService is NavidromeService {
+            return availableServers.first?.name
+        }
+        return nil
     }
 
     var selectedLibraryTitle: String? {
-        selectedLibrary?.title
+        if let library = selectedPlexLibrary {
+            return library.title
+        }
+        if context.mediaService is NavidromeService {
+            return availableLibraries.first?.title
+        }
+        return nil
     }
 
     var hasExistingContent: Bool {
@@ -66,24 +78,27 @@ final class LibraryStore: ObservableObject {
     }
 
     var shouldPromptForServerSelection: Bool {
-        context.mediaService.isAuthenticated && !availableServers.isEmpty && selectedServer == nil
+        guard context.plexService != nil else { return false }
+        return context.mediaService.isAuthenticated && !availableServers.isEmpty && selectedPlexServer == nil
     }
 
-    var selectedServer: PlexServer? {
-        if let selectedID = context.settingsStore.settings.selectedServerID,
-           let server = availableServers.first(where: { $0.id == selectedID }) {
-            return server
+    var selectedPlexServer: PlexServer? {
+        guard let plexService,
+              let server = plexService.plexServers.first(where: { $0.id == context.settingsStore.settings.selectedServerID }) else {
+            return nil
         }
-        return nil
+        return server
     }
 
-    var selectedLibrary: PlexMusicLibrary? {
-        guard !availableLibraries.isEmpty else { return nil }
+    var selectedPlexLibrary: PlexMusicLibrary? {
+        guard let plexService, selectedPlexServer != nil else { return nil }
+        let libraries = plexService.plexLibraries
+        guard !libraries.isEmpty else { return nil }
         if let selectedID = context.settingsStore.settings.selectedLibraryID,
-           let library = availableLibraries.first(where: { $0.id == selectedID }) {
+           let library = libraries.first(where: { $0.id == selectedID }) {
             return library
         }
-        return availableLibraries.first
+        return libraries.first
     }
 
     var currentLoadingStatusLine: String {
@@ -92,6 +107,32 @@ final class LibraryStore: ObservableObject {
         }
         return "Loading library..."
     }
+
+    // MARK: - Source-agnostic reload (works for Plex and Navidrome)
+
+    func reloadData() async {
+        isLoadingLibrary = true
+        libraryLoadError = nil
+        availableServers = context.mediaService.availableServers
+        availableLibraries = context.mediaService.availableLibraries
+        startDebugLog("Loading content")
+
+        do {
+            let homeContent = try await context.mediaService.fetchHomeContent(limit: LibraryConfiguration.homeFetchLimit)
+            setHomeContent(homeContent)
+            clearSuccessfulLoadState()
+            logDebug("Loaded \(recentlyPlayedAlbums.count) recent played, \(recentlyAddedAlbums.count) recent added, \(playlists.count) playlists, \(stations.count) stations")
+        } catch {
+            libraryLoadError = LibraryLoadError(error)
+            shouldPresentInitialLoadFailure = true
+            logDebug("Load failed: \(error.localizedDescription)")
+        }
+
+        isLoadingLibrary = false
+        currentLoadingMessage = nil
+    }
+
+    // MARK: - Plex-specific server/library selection
 
     func selectServer(id: String) {
         guard context.settingsStore.settings.selectedServerID != id else { return }
@@ -113,13 +154,21 @@ final class LibraryStore: ObservableObject {
 
     func refreshCurrentLibraryContent() {
         Task {
-            await reloadHomeContentForSelection()
+            if context.plexService != nil {
+                await reloadHomeContentForSelection()
+            } else {
+                await reloadData()
+            }
         }
     }
 
     func refreshServersAndLibraries() {
         Task {
-            await refreshCurrentSelection()
+            if context.plexService != nil {
+                await refreshCurrentSelection()
+            } else {
+                await reloadData()
+            }
         }
     }
 
@@ -132,7 +181,8 @@ final class LibraryStore: ObservableObject {
     }
 
     func reloadPlexData() async {
-        guard let userToken = plexService.authService.authToken else { return }
+        guard let plexService,
+              let userToken = plexService.authService.authToken else { return }
 
         startDebugLog("Reloading Plex data")
         isLoadingLibrary = true
@@ -141,7 +191,10 @@ final class LibraryStore: ObservableObject {
         do {
             logDebug("Fetching Plex servers")
             let servers = try await plexService.fetchServers(userToken: userToken)
-            availableServers = servers
+            plexService.plexServers = servers
+            let mediaServers = servers.map(\.mediaServer)
+            plexService.availableServers = mediaServers
+            availableServers = mediaServers
             logDebug("Found \(servers.count) server(s)")
 
             guard let server = resolveServer(from: servers) else {
@@ -151,22 +204,26 @@ final class LibraryStore: ObservableObject {
                 throw PlexAPIError.serverSelectionRequired
             }
 
-            context.settingsStore.settings.selectedServerID = server.id
+            applyPlexSelection(server: server)
             logDebug("Using server: \(server.name)")
 
             logDebug("Fetching music libraries")
             let libraries = try await plexService.fetchMusicLibraries(server: server, userToken: userToken)
-            availableLibraries = libraries
+            plexService.plexLibraries = libraries
+            let mediaLibraries = libraries.map(\.mediaMusicLibrary)
+            plexService.availableLibraries = mediaLibraries
+            availableLibraries = mediaLibraries
             logDebug("Found \(libraries.count) library/libraries")
 
             guard let library = resolveLibrary(from: libraries) else {
                 throw PlexAPIError.invalidResponse
             }
 
-            context.settingsStore.settings.selectedLibraryID = library.id
+            applyPlexSelection(library: library)
             logDebug("Using library: \(library.title)")
 
             try await loadLibraryContent(server: server, library: library, userToken: userToken)
+            clearSuccessfulLoadState()
             logDebug("Library load completed")
         } catch {
             libraryLoadError = LibraryLoadError(error)
@@ -182,33 +239,40 @@ final class LibraryStore: ObservableObject {
         relatedAlbumsTask?.cancel()
         relatedAlbumsTask = nil
         relatedAlbums = []
-        relatedAlbumsRatingKey = nil
+        relatedAlbumsTrackID = nil
         resetQueueStationRecommendations()
     }
 
-    func refreshRelatedAlbums(for track: PlexTrack) {
-        guard relatedAlbumsRatingKey != track.albumRatingKey || relatedAlbums.isEmpty else { return }
+    func resetContent() {
+        recentlyPlayedAlbums = []
+        recentlyAddedAlbums = []
+        playlists = []
+        stations = []
+        availableServers = []
+        availableLibraries = []
+        libraryLoadError = nil
+        currentLoadingMessage = nil
+        shouldPresentInitialLoadFailure = false
+        resetPlaybackPreview()
+    }
+
+    func refreshRelatedAlbums(for track: MediaTrack) {
+        let albumID = track.albumRatingKey ?? track.id
+        guard relatedAlbumsTrackID != albumID || relatedAlbums.isEmpty else { return }
 
         relatedAlbumsTask?.cancel()
-        relatedAlbumsRatingKey = track.albumRatingKey
-
-        guard let albumRatingKey = track.albumRatingKey,
-              let server = selectedServer,
-              let userToken = plexService.authService.authToken else {
-            return
-        }
+        relatedAlbumsTrackID = albumID
 
         relatedAlbumsTask = Task {
             do {
-                let albums = try await plexService.fetchRelatedAlbums(
-                    server: server,
-                    albumRatingKey: albumRatingKey,
-                    userToken: userToken
+                let albums = try await context.mediaService.fetchRelatedAlbums(
+                    albumRatingKey: albumID,
+                    limit: LibraryConfiguration.relatedAlbumsLimit
                 )
                 guard !Task.isCancelled else { return }
                 relatedAlbums = albums
                 if albums.isEmpty {
-                    logDebug("No related albums found for album \(albumRatingKey)")
+                    logDebug("No related albums found for album \(albumID)")
                 }
             } catch {
                 guard !Task.isCancelled else { return }
@@ -217,8 +281,15 @@ final class LibraryStore: ObservableObject {
         }
     }
 
-    func refreshQueueStationRecommendations(for tracks: [PlexTrack]) {
-        let artistSeeds = uniqueArtistSeeds(from: tracks)
+    func refreshQueueStationRecommendations(for tracks: [MediaTrack]) {
+        guard let plexService,
+              let server = selectedPlexServer,
+              let userToken = plexService.authService.authToken else {
+            queueStationRecommendations = []
+            return
+        }
+
+        let artistSeeds = uniqueArtistSeeds(from: tracks, plexService: plexService, server: server, userToken: userToken)
         let albumSeeds = uniqueAlbumSeeds(from: tracks)
         let seedIDs = artistSeeds.map { "artist-\($0.id)" } + albumSeeds.map { "album-\($0.id)" }
 
@@ -229,11 +300,7 @@ final class LibraryStore: ObservableObject {
         queueStationRecommendationsGeneration += 1
         let generation = queueStationRecommendationsGeneration
 
-        guard !seedIDs.isEmpty,
-              let server = selectedServer,
-              let userToken = plexService.authService.authToken else {
-            return
-        }
+        guard !seedIDs.isEmpty else { return }
 
         queueStationRecommendationsTask = Task {
             var recommendations: [PlexStationRecommendation] = []
@@ -290,7 +357,7 @@ final class LibraryStore: ObservableObject {
         }
     }
 
-    private func uniqueArtistSeeds(from tracks: [PlexTrack]) -> [QueueStationSeed] {
+    private func uniqueArtistSeeds(from tracks: [MediaTrack], plexService: PlexService, server: PlexServer, userToken: String) -> [QueueStationSeed] {
         var seenIDs = Set<String>()
         return tracks.compactMap { track -> QueueStationSeed? in
             guard seenIDs.count < LibraryConfiguration.artistStationSeedLimit,
@@ -299,12 +366,7 @@ final class LibraryStore: ObservableObject {
                 return nil
             }
 
-            let artistArtworkURL: URL?
-            if let server = selectedServer, let token = plexService.authService.authToken {
-                artistArtworkURL = plexArtworkURL(from: "/library/metadata/\(id)/thumb", server: server, token: token)
-            } else {
-                artistArtworkURL = nil
-            }
+            let artistArtworkURL: URL? = plexArtworkURL(from: "/library/metadata/\(id)/thumb", server: server, token: userToken)
 
             return QueueStationSeed(
                 id: id,
@@ -314,7 +376,7 @@ final class LibraryStore: ObservableObject {
         }
     }
 
-    private func uniqueAlbumSeeds(from tracks: [PlexTrack]) -> [QueueStationSeed] {
+    private func uniqueAlbumSeeds(from tracks: [MediaTrack]) -> [QueueStationSeed] {
         var seenIDs = Set<String>()
         return tracks.compactMap { track -> QueueStationSeed? in
             guard seenIDs.count < LibraryConfiguration.artistStationSeedLimit,
@@ -328,30 +390,36 @@ final class LibraryStore: ObservableObject {
     }
 
     private func reloadLibrariesAndContentForSelectedServer(id: String) async {
-        guard let userToken = plexService.authService.authToken,
-              let selectedServer = availableServers.first(where: { $0.id == id }) else {
+        guard let plexService,
+              let userToken = plexService.authService.authToken,
+              let selectedServer = plexService.plexServers.first(where: { $0.id == id }) else {
             return
         }
 
         startDebugLog("Switching server")
         isLoadingLibrary = true
         libraryLoadError = nil
+        applyPlexSelection(server: selectedServer)
 
         do {
             logDebug("Fetching libraries for \(selectedServer.name)")
             let libraries = try await plexService.fetchMusicLibraries(server: selectedServer, userToken: userToken)
+            plexService.plexLibraries = libraries
+            let mediaLibraries = libraries.map(\.mediaMusicLibrary)
+            plexService.availableLibraries = mediaLibraries
             guard selectedServerID == selectedServer.id else { return }
 
-            availableLibraries = libraries
+            availableLibraries = mediaLibraries
             logDebug("Found \(libraries.count) library/libraries")
 
             guard let library = resolveLibrary(from: libraries) else {
                 throw PlexAPIError.invalidResponse
             }
 
-            context.settingsStore.settings.selectedLibraryID = library.id
+            applyPlexSelection(library: library)
             logDebug("Using library: \(library.title)")
             try await loadLibraryContent(server: selectedServer, library: library, userToken: userToken)
+            clearSuccessfulLoadState()
             logDebug("Server switch completed")
         } catch {
             libraryLoadError = LibraryLoadError(error)
@@ -363,20 +431,23 @@ final class LibraryStore: ObservableObject {
     }
 
     private func reloadHomeContentForSelection() async {
-        guard let userToken = plexService.authService.authToken,
-              let server = selectedServer,
-              let library = selectedLibrary else {
+        guard let plexService,
+              let userToken = plexService.authService.authToken,
+              let server = selectedPlexServer,
+              let library = selectedPlexLibrary else {
             return
         }
 
         startDebugLog("Switching library")
         isLoadingLibrary = true
         libraryLoadError = nil
+        applyPlexSelection(server: server, library: library)
 
         do {
             logDebug("Using server: \(server.name)")
             logDebug("Using library: \(library.title)")
             try await loadLibraryContent(server: server, library: library, userToken: userToken)
+            clearSuccessfulLoadState()
             logDebug("Library switch completed")
         } catch {
             libraryLoadError = LibraryLoadError(error)
@@ -388,7 +459,8 @@ final class LibraryStore: ObservableObject {
     }
 
     private func refreshCurrentSelection() async {
-        guard let userToken = plexService.authService.authToken else { return }
+        guard let plexService,
+              let userToken = plexService.authService.authToken else { return }
 
         startDebugLog("Refreshing current library")
         isLoadingLibrary = true
@@ -397,7 +469,10 @@ final class LibraryStore: ObservableObject {
         do {
             logDebug("Fetching Plex servers")
             let servers = try await plexService.fetchServers(userToken: userToken)
-            availableServers = servers
+            plexService.plexServers = servers
+            let mediaServers = servers.map(\.mediaServer)
+            plexService.availableServers = mediaServers
+            availableServers = mediaServers
             logDebug("Found \(servers.count) server(s)")
 
             guard let server = resolveServer(from: servers) else {
@@ -407,21 +482,25 @@ final class LibraryStore: ObservableObject {
                 throw PlexAPIError.serverSelectionRequired
             }
 
-            context.settingsStore.settings.selectedServerID = server.id
+            applyPlexSelection(server: server)
             logDebug("Using server: \(server.name)")
 
             logDebug("Fetching music libraries")
             let libraries = try await plexService.fetchMusicLibraries(server: server, userToken: userToken)
-            availableLibraries = libraries
+            plexService.plexLibraries = libraries
+            let mediaLibraries = libraries.map(\.mediaMusicLibrary)
+            plexService.availableLibraries = mediaLibraries
+            availableLibraries = mediaLibraries
             logDebug("Found \(libraries.count) library/libraries")
 
             guard let library = resolveLibrary(from: libraries) else {
                 throw PlexAPIError.invalidResponse
             }
 
-            context.settingsStore.settings.selectedLibraryID = library.id
+            applyPlexSelection(library: library)
             logDebug("Using library: \(library.title)")
             try await loadLibraryContent(server: server, library: library, userToken: userToken)
+            clearSuccessfulLoadState()
             logDebug("Refresh completed")
         } catch {
             libraryLoadError = LibraryLoadError(error)
@@ -438,6 +517,7 @@ final class LibraryStore: ObservableObject {
     }
 
     private func reloadHomeContent(server: PlexServer, library: PlexMusicLibrary, userToken: String) async throws {
+        guard let plexService else { return }
         let homeContent = try await plexService.fetchHomeContent(
             server: server,
             library: library,
@@ -445,16 +525,38 @@ final class LibraryStore: ObservableObject {
             limit: LibraryConfiguration.homeFetchLimit
         )
 
-        recentlyPlayedAlbums = homeContent.recentlyPlayedAlbums
-        recentlyAddedAlbums = homeContent.recentlyAddedAlbums
-        playlists = homeContent.playlists
-        stations = homeContent.stations
+        setHomeContent(homeContent.mediaHomeContent)
         logDebug("Loaded \(recentlyPlayedAlbums.count) recent played, \(recentlyAddedAlbums.count) recent added, \(playlists.count) playlists, \(stations.count) stations")
     }
 
+    private func setHomeContent(_ content: MediaHomeContent) {
+        recentlyPlayedAlbums = content.recentlyPlayedAlbums
+        recentlyAddedAlbums = content.recentlyAddedAlbums
+        playlists = content.playlists
+        stations = content.stations
+    }
+
+    private func applyPlexSelection(server: PlexServer? = nil, library: PlexMusicLibrary? = nil) {
+        if let server {
+            context.settingsStore.settings.selectedServerID = server.id
+            plexService?.selectedServerID = server.id
+        }
+
+        if let library {
+            context.settingsStore.settings.selectedLibraryID = library.id
+            plexService?.selectedLibraryID = library.id
+        }
+    }
+
+    private func clearSuccessfulLoadState() {
+        libraryLoadError = nil
+        shouldPresentInitialLoadFailure = false
+    }
+
     private func ensureLastPlayedTrack() async {
-        guard let lastAlbum = recentlyPlayedAlbums.first,
-              let server = selectedServer,
+        guard let plexService,
+              let lastAlbum = recentlyPlayedAlbums.first,
+              let server = selectedPlexServer,
               let userToken = plexService.authService.authToken else {
             return
         }
@@ -462,8 +564,9 @@ final class LibraryStore: ObservableObject {
         context.playbackEngine?.resetForNewTrack()
 
         do {
-            let tracks = try await plexService.fetchAlbumTracks(server: server, album: lastAlbum, userToken: userToken)
-            guard let firstTrack = tracks.first else {
+            let plexAlbum = PlexAlbum(id: lastAlbum.id, title: lastAlbum.title, artist: lastAlbum.artist, artworkURL: lastAlbum.artworkURL)
+            let tracks = try await plexService.fetchAlbumTracks(server: server, album: plexAlbum, userToken: userToken)
+            guard let firstTrack = tracks.first?.mediaTrack else {
                 logDebug("No tracks found in last played album")
                 return
             }
@@ -497,7 +600,7 @@ final class LibraryStore: ObservableObject {
 
     private enum LibraryConfiguration {
         static let homeFetchLimit = 12
-        static let relatedAlbumsLimit = 3
+        static let relatedAlbumsLimit = 4
         static let artistStationSeedLimit = 2
         static let albumRadioSimilarLimit = 4
     }

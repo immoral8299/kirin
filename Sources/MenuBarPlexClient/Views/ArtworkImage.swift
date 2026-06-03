@@ -75,7 +75,7 @@ private final class ArtworkThumbnailCache {
 
     private init() {
         diskCacheDirectory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("PlexTrayArtworkThumbnails", isDirectory: true)
+            .appendingPathComponent("KirinArtworkThumbnails", isDirectory: true)
 
         cache.countLimit = 256
         cache.totalCostLimit = 24 * 1_024 * 1_024

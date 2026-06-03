@@ -43,18 +43,20 @@ final class PlexAuthService: ObservableObject, PlexAuthProviding {
     @Published private(set) var status: PlexAuthStatus = .idle
     @Published private(set) var authToken: String?
 
-    private let clientIdentifier = "plextray"
-    private let productName = "PlexTray"
+    private let clientIdentifier = "Kirin"
+    private let productName = "Kirin"
     private let session: URLSession
     private let keychainStore = KeychainStore()
-    private let tokenKey = "plex.auth.token"
+    private let tokenKey = "plex.default"
+    private let usernameKey = "plex.username"
 
     init(session: URLSession = .shared) {
         self.session = session
         self.authToken = keychainStore.read(key: tokenKey)
 
         if authToken != nil {
-            status = PlexAuthStatus(state: .authenticated(username: "Plex User"))
+            let username = keychainStore.read(key: usernameKey) ?? "Plex User"
+            status = PlexAuthStatus(state: .authenticated(username: username))
             Task {
                 await refreshDisplayName()
             }
@@ -87,6 +89,7 @@ final class PlexAuthService: ObservableObject, PlexAuthProviding {
     func signOut() {
         authToken = nil
         keychainStore.delete(key: tokenKey)
+        keychainStore.delete(key: usernameKey)
         status = .idle
     }
 
@@ -151,6 +154,7 @@ final class PlexAuthService: ObservableObject, PlexAuthProviding {
 
         do {
             if let username = try await fetchCurrentUsername(token: token) {
+                keychainStore.save(username, key: usernameKey)
                 status = PlexAuthStatus(state: .authenticated(username: username))
             }
         } catch {

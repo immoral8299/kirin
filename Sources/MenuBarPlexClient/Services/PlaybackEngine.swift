@@ -23,19 +23,21 @@ final class PlaybackEngine: ObservableObject {
     private var player: AVPlayer?
     private var timeObserverToken: Any?
     private var playerItemEndObserver: AnyCancellable?
+    private var playerItemStatusObserver: AnyCancellable?
     private var playerTimeControlStatusObserver: AnyCancellable?
     private var playbackPreparationID: Int = 0
     private var seekID: Int = 0
     private var isPlaybackRequested = false
     private var loudnessGainCache: [String: Float] = [:]
     private var missingLoudnessAnalysisTrackIDs = Set<String>()
-    private var _currentTrack: PlexTrack?
+    private var _currentTrack: MediaTrack?
+    private let fallbackLoudnessGain: Float = -6
 
     init(context: StoreContext) {
         self.context = context
     }
 
-    var currentTrack: PlexTrack? { _currentTrack }
+    var currentTrack: MediaTrack? { _currentTrack }
 
     var playbackProgress: Double {
         if let pendingSeekProgress {
@@ -104,12 +106,12 @@ final class PlaybackEngine: ObservableObject {
         synchronizePlaybackState(with: player?.timeControlStatus ?? .waitingToPlayAtSpecifiedRate)
     }
 
-    func play(track: PlexTrack) async {
+    func play(track: MediaTrack) async {
         _currentTrack = track
         await playCurrentTrack()
     }
 
-    func preparePreviewTrack(_ track: PlexTrack) {
+    func preparePreviewTrack(_ track: MediaTrack) {
         updateNowPlaying(from: track)
         Task {
             await preparePlayer(for: track)
@@ -131,6 +133,8 @@ final class PlaybackEngine: ObservableObject {
     func stopPlayback() {
         player?.pause()
         removeTimeObserver()
+        playerItemEndObserver = nil
+        playerItemStatusObserver = nil
         player = nil
     }
 
@@ -141,7 +145,7 @@ final class PlaybackEngine: ObservableObject {
 
     // MARK: - Private
 
-    func updateNowPlaying(from track: PlexTrack) {
+    func updateNowPlaying(from track: MediaTrack) {
         nowPlaying = TrackMetadata(
             trackName: track.title,
             trackArtist: track.trackArtist,
@@ -153,7 +157,7 @@ final class PlaybackEngine: ObservableObject {
         )
     }
 
-    private func preparePlayer(for track: PlexTrack) async {
+    private func preparePlayer(for track: MediaTrack) async {
         let preparationID = nextPlaybackPreparationID()
         _currentTrack = track
 
@@ -165,6 +169,7 @@ final class PlaybackEngine: ObservableObject {
         context.libraryStore?.refreshRelatedAlbums(for: track)
         let item = AVPlayerItem(url: track.streamURL)
         observePlaybackEnd(for: item)
+        observePlayerItemStatus(for: item)
 
         if let player {
             player.replaceCurrentItem(with: item)
@@ -178,13 +183,13 @@ final class PlaybackEngine: ObservableObject {
         updatePlaybackTiming(from: item)
     }
 
-    private func applyPlaybackVolume(for track: PlexTrack) async {
+    private func applyPlaybackVolume(for track: MediaTrack) async {
         let volume = await resolvePlaybackVolume(for: track)
         guard _currentTrack?.id == track.id else { return }
         player?.volume = volume
     }
 
-    private func resolvePlaybackVolume(for track: PlexTrack) async -> Float {
+    private func resolvePlaybackVolume(for track: MediaTrack) async -> Float {
         guard context.settingsStore.settings.loudnessLevelingEnabled else {
             logDebug("Loudness leveling disabled for \(track.title)")
             return 1.0
@@ -192,33 +197,30 @@ final class PlaybackEngine: ObservableObject {
 
         logDebug("Loudness leveling enabled for \(track.title)")
 
-        guard let server = context.libraryStore?.selectedServer,
-              let userToken = context.plexService!.authService.authToken else {
-            logDebug("Skipping loudness leveling for \(track.title): missing identifiers")
+        guard canResolveLoudnessGain(for: track) else {
             return 1.0
         }
 
-        let ratingKey = track.ratingKey ?? track.id
+        let loudnessID = track.ratingKey ?? track.id
+        let cacheKey = loudnessCacheKey(for: loudnessID)
 
-        if let cachedGain = loudnessGainCache[ratingKey] {
+        if let cachedGain = loudnessGainCache[cacheKey] {
             let volume = volumeScalar(for: cachedGain)
             logDebug("Applied cached loudness gain \(formatted(decibels: cachedGain)) dB to \(track.title)")
             return volume
         }
 
-        if missingLoudnessAnalysisTrackIDs.contains(ratingKey) {
-            logDebug("No loudness analysis found for \(track.title)")
-            return 1.0
+        if missingLoudnessAnalysisTrackIDs.contains(cacheKey) {
+            return fallbackPlaybackVolume(for: track, reason: "No loudness analysis found")
         }
 
         do {
-            guard let gain = try await context.plexService!.fetchLoudnessGain(server: server, ratingKey: ratingKey, userToken: userToken) else {
-                missingLoudnessAnalysisTrackIDs.insert(ratingKey)
-                logDebug("No loudness analysis found for \(track.title)")
-                return 1.0
+            guard let gain = try await fetchLoudnessGain(for: loudnessID, track: track) else {
+                missingLoudnessAnalysisTrackIDs.insert(cacheKey)
+                return fallbackPlaybackVolume(for: track, reason: "No loudness analysis found")
             }
 
-            loudnessGainCache[ratingKey] = gain
+            loudnessGainCache[cacheKey] = gain
             let volume = volumeScalar(for: gain)
 
             if volume < 1.0 {
@@ -229,9 +231,58 @@ final class PlaybackEngine: ObservableObject {
 
             return volume
         } catch {
-            logDebug("Skipped loudness leveling for \(track.title): \(error.localizedDescription)")
-            return 1.0
+            missingLoudnessAnalysisTrackIDs.insert(cacheKey)
+            return fallbackPlaybackVolume(for: track, reason: "Skipped loudness lookup: \(error.localizedDescription)")
         }
+    }
+
+    private func canResolveLoudnessGain(for track: MediaTrack) -> Bool {
+        if let plexService = context.mediaService as? PlexService {
+            guard context.libraryStore?.selectedPlexServer != nil,
+                  context.libraryStore?.selectedPlexLibrary != nil,
+                  plexService.authService.authToken != nil else {
+                logDebug("Skipping Plex loudness leveling for \(track.title): missing active Plex library")
+                return false
+            }
+            return true
+        }
+
+        if context.mediaService is NavidromeService {
+            return true
+        }
+
+        logDebug("Skipping loudness leveling for \(track.title): unsupported media service")
+        return false
+    }
+
+    private func fetchLoudnessGain(for loudnessID: String, track: MediaTrack) async throws -> Float? {
+        if let plexService = context.mediaService as? PlexService {
+            guard let server = context.libraryStore?.selectedPlexServer,
+                  context.libraryStore?.selectedPlexLibrary != nil,
+                  let userToken = plexService.authService.authToken else {
+                logDebug("Skipping Plex loudness leveling for \(track.title): missing active Plex library")
+                return nil
+            }
+
+            return try await plexService.fetchLoudnessGain(server: server, ratingKey: loudnessID, userToken: userToken)
+        }
+
+        if context.mediaService is NavidromeService {
+            return try await context.mediaService.fetchLoudnessGain(ratingKey: loudnessID)
+        }
+
+        logDebug("Skipping loudness leveling for \(track.title): unsupported media service")
+        return nil
+    }
+
+    private func loudnessCacheKey(for loudnessID: String) -> String {
+        "\(String(describing: type(of: context.mediaService))):\(loudnessID)"
+    }
+
+    private func fallbackPlaybackVolume(for track: MediaTrack, reason: String) -> Float {
+        let volume = volumeScalar(for: fallbackLoudnessGain)
+        logDebug("\(reason) for \(track.title); applying fallback \(formatted(decibels: fallbackLoudnessGain)) dB")
+        return volume
     }
 
     private func volumeScalar(for gainInDecibels: Float) -> Float {
@@ -248,10 +299,33 @@ final class PlaybackEngine: ObservableObject {
     }
 
     private func observePlaybackEnd(for item: AVPlayerItem) {
+        playerItemEndObserver = nil
         playerItemEndObserver = NotificationCenter.default.publisher(for: .AVPlayerItemDidPlayToEndTime, object: item)
             .sink { [weak self] _ in
                 Task { @MainActor in
                     self?.handlePlaybackEnded()
+                }
+            }
+    }
+
+    private func observePlayerItemStatus(for item: AVPlayerItem) {
+        playerItemStatusObserver = item.publisher(for: \.status)
+            .sink { [weak self] status in
+                Task { @MainActor in
+                    guard let self, self.player?.currentItem === item else { return }
+                    switch status {
+                    case .readyToPlay:
+                        self.updatePlaybackTiming(from: item)
+                        if self.isPlaybackRequested {
+                            self.transitionPlaybackState(to: .playing)
+                        }
+                    case .failed:
+                        self.transitionPlaybackState(to: .paused)
+                    case .unknown:
+                        break
+                    @unknown default:
+                        break
+                    }
                 }
             }
     }
@@ -313,7 +387,11 @@ final class PlaybackEngine: ObservableObject {
     private func synchronizePlaybackState(with timeControlStatus: AVPlayer.TimeControlStatus) {
         switch timeControlStatus {
         case .paused:
-            transitionPlaybackState(to: isPlaybackRequested ? .buffering : .paused)
+            if isPlaybackRequested, player?.currentItem?.status == .readyToPlay {
+                transitionPlaybackState(to: .playing)
+            } else {
+                transitionPlaybackState(to: isPlaybackRequested ? .buffering : .paused)
+            }
         case .waitingToPlayAtSpecifiedRate:
             transitionPlaybackState(to: isPlaybackRequested ? .buffering : .paused)
         case .playing:

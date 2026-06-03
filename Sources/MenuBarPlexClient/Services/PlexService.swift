@@ -57,8 +57,8 @@ final class PlexService: MediaService {
         }
     }
 
-    private var plexServers: [PlexServer] = []
-    private var plexLibraries: [PlexMusicLibrary] = []
+    var plexServers: [PlexServer] = []
+    var plexLibraries: [PlexMusicLibrary] = []
 
     // MARK: - Init
 

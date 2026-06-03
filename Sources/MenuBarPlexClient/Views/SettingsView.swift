@@ -16,12 +16,14 @@ struct SettingsView: View {
             settingsHeader
 
             VStack(alignment: .leading, spacing: 16) {
-                settingsSection("Library") {
-                    pickerRow("Server", selection: serverSelectionBinding, items: libraryStore.availableServers.map { ($0.name, Optional($0.id)) })
-                        .disabled(libraryStore.availableServers.isEmpty)
-                    dividerRow
-                    pickerRow("Music Library", selection: librarySelectionBinding, items: libraryStore.availableLibraries.map { ($0.title, Optional($0.id)) })
-                        .disabled(libraryStore.availableLibraries.isEmpty)
+                if isPlexSource {
+                    settingsSection("Library") {
+                        pickerRow("Server", selection: serverSelectionBinding, items: libraryStore.availableServers.map { ($0.name, Optional($0.id)) })
+                            .disabled(libraryStore.availableServers.isEmpty)
+                        dividerRow
+                        pickerRow("Music Library", selection: librarySelectionBinding, items: libraryStore.availableLibraries.map { ($0.title, Optional($0.id)) })
+                            .disabled(libraryStore.availableLibraries.isEmpty)
+                    }
                 }
 
                 settingsSection("Menu Bar Format") {
@@ -38,8 +40,10 @@ struct SettingsView: View {
                     toggleRow("Recently Played Albums", isOn: showRecentlyPlayedBinding)
                     dividerRow
                     toggleRow("Recently Added Albums", isOn: showRecentlyAddedBinding)
-                    dividerRow
-                    toggleRow("Playlists", isOn: showPlaylistsBinding)
+                    if isPlexSource {
+                        dividerRow
+                        toggleRow("Playlists", isOn: showPlaylistsBinding)
+                    }
                     dividerRow
                     toggleRow("Stations", isOn: showStationsBinding)
                 }
@@ -98,10 +102,25 @@ struct SettingsView: View {
             .buttonStyle(.plain)
             .focusable(false)
             .font(.system(size: 12, weight: .semibold))
-            .interactiveCursor(disabled: authService.authToken == nil)
+            .interactiveCursor(disabled: !canRefreshLibrary)
             .foregroundStyle(AppTheme.accent)
-            .disabled(authService.authToken == nil)
-            .help("Refresh Servers and Libraries")
+            .disabled(!canRefreshLibrary)
+            .help(isPlexSource ? "Refresh Servers and Libraries" : "Refresh Library")
+        }
+    }
+
+    private var isPlexSource: Bool {
+        settingsStore.settings.mediaSource == .plex
+    }
+
+    private var canRefreshLibrary: Bool {
+        switch settingsStore.settings.mediaSource {
+        case .plex:
+            return authService.authToken != nil
+        case .navidrome:
+            return settingsStore.settings.navidromeConfig.isFilled
+        case .unspecified:
+            return false
         }
     }
 
@@ -254,11 +273,30 @@ struct SettingsView: View {
 
             Toggle("", isOn: isOn)
                 .labelsHidden()
-                .toggleStyle(.switch)
+                .toggleStyle(CompactAccentToggleStyle())
         }
         .interactiveCursor()
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
+    }
+}
+
+private struct CompactAccentToggleStyle: ToggleStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        Button {
+            configuration.isOn.toggle()
+        } label: {
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .fill(configuration.isOn ? AppTheme.accent : Color.secondary.opacity(0.28))
+                .frame(width: 34, height: 18)
+                .overlay(alignment: configuration.isOn ? .trailing : .leading) {
+                    Circle()
+                        .fill(.white)
+                        .frame(width: 14, height: 14)
+                        .padding(2)
+                }
+        }
+        .buttonStyle(.plain)
     }
 }
 

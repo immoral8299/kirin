@@ -1,6 +1,6 @@
-# PlexTray
+# Kirin
 
-PlexTray is a macOS 13+ menu bar music client for Plex with a live in-menu UI.
+Kirin is a macOS 13+ menu bar music client for Plex with a live in-menu UI.
 
 ## Current MVP Scaffold
 
@@ -36,7 +36,7 @@ PlexTray is a macOS 13+ menu bar music client for Plex with a live in-menu UI.
 
 ```bash
 swift build
-swift run PlexTray
+swift run Kirin
 ```
 
 ## Release
@@ -51,6 +51,6 @@ Optional environment variables:
 
 - `VERSION=0.1.0`
 - `BUILD_NUMBER=1`
-- `BUNDLE_ID=com.yourcompany.PlexTray`
+- `BUNDLE_ID=com.yourcompany.Kirin`
 - `SIGNING_IDENTITY="Developer ID Application: Your Name (TEAMID)"`
 - `NOTARY_PROFILE=AC_NOTARY`

@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import QuartzCore
 import SwiftUI
 
 fileprivate enum StatusBarConfig {
@@ -18,6 +19,8 @@ fileprivate enum StatusBarConfig {
     static let marqueeHeight: CGFloat = 16
     static let stackViewSpacing: CGFloat = 8
     static let buttonHorizontalMargin: CGFloat = 6
+    static let panelAnimationDuration: TimeInterval = 0.16
+    static let panelAnimationOffset: CGFloat = 10
 }
 
 @MainActor
@@ -30,10 +33,11 @@ final class StatusItemController: NSObject {
     private let panelContainerView: NSView
     private let panelContentView = NSView(frame: .zero)
     private var rootView: NSHostingView<MenuBarRootView>!
-    private let panel: NSPanel
+    private let panel: MenuBarPanel
     private var cancellables = Set<AnyCancellable>()
     private var globalMouseMonitor: Any?
-    private var isSettingsTabSelected = false
+    private var isPanelPinned = false
+    private var isPanelHiding = false
     private var hasRenderedResolvedStatus = false
 
     private let panelState = PanelState()
@@ -41,9 +45,9 @@ final class StatusItemController: NSObject {
     init(appState: AppState) {
         self.appState = appState
         panelContainerView = Self.makePanelContainerView()
-        panel = NSPanel(
+        panel = MenuBarPanel(
             contentRect: NSRect(origin: .zero, size: StatusBarConfig.panelSize),
-            styleMask: [.borderless, .nonactivatingPanel],
+            styleMask: [.borderless],
             backing: .buffered,
             defer: false
         )
@@ -65,10 +69,10 @@ final class StatusItemController: NSObject {
                 appState: appState,
                 panelState: panelState,
                 onClose: { [weak self] in
-                    self?.panel.orderOut(nil)
+                    self?.hidePanel()
                 },
-                onTabChange: { [weak self] isSettingsTabSelected in
-                    self?.isSettingsTabSelected = isSettingsTabSelected
+                onPinChange: { [weak self] isPinned in
+                    self?.isPanelPinned = isPinned
                 }
             )
         )
@@ -77,10 +81,12 @@ final class StatusItemController: NSObject {
     private func configurePanel() {
         panel.isFloatingPanel = true
         panel.level = .statusBar
+        panel.becomesKeyOnlyIfNeeded = false
         panel.hidesOnDeactivate = false
         panel.hasShadow = true
         panel.backgroundColor = .clear
         panel.isOpaque = false
+        panel.acceptsMouseMovedEvents = true
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
 
         panelContainerView.wantsLayer = true
@@ -183,8 +189,8 @@ final class StatusItemController: NSObject {
     }
 
     private func hidePanelIfUnpinned() {
-        guard panel.isVisible, !isSettingsTabSelected else { return }
-        panel.orderOut(nil)
+        guard panel.isVisible, !isPanelPinned else { return }
+        hidePanel()
     }
 
     private func bind(appState: AppState) {
@@ -197,8 +203,8 @@ final class StatusItemController: NSObject {
             .sink { [weak self, weak appState] _ in
                 guard let self, let appState else { return }
                 Task { @MainActor in
-                    if !appState.isAuthenticated {
-                        self.isSettingsTabSelected = false
+                    if !appState.isConfigured {
+                        self.isPanelPinned = false
                     }
                     self.applyThemePreference(appState.themePreference)
                     self.updateStatus(iconName: appState.statusIconName, text: appState.statusLine)
@@ -291,24 +297,63 @@ final class StatusItemController: NSObject {
 
     @objc
     private func playStationAction(_ sender: NSMenuItem) {
-        guard let station = sender.representedObject as? PlexStation else { return }
+        guard let station = sender.representedObject as? MediaStation else { return }
         appState.playStation(station)
     }
 
     @objc
     private func togglePopover(_ sender: Any?) {
         if panel.isVisible {
-            panel.orderOut(sender)
+            hidePanel()
         } else {
             showPanel()
         }
     }
 
     private func showPanel() {
-        isSettingsTabSelected = false
+        isPanelPinned = false
+        isPanelHiding = false
         panelState.openCount += 1
-        positionPanel()
-        panel.orderFrontRegardless()
+
+        let targetFrame = panelTargetFrame()
+        var initialFrame = targetFrame
+        initialFrame.origin.y += StatusBarConfig.panelAnimationOffset
+
+        panel.alphaValue = 0
+        panel.setFrame(initialFrame, display: false)
+        NSApp.activate(ignoringOtherApps: true)
+        panel.makeKeyAndOrderFront(nil)
+
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = StatusBarConfig.panelAnimationDuration
+            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            panel.animator().alphaValue = 1
+            panel.animator().setFrame(targetFrame, display: true)
+        }
+    }
+
+    private func hidePanel() {
+        guard panel.isVisible, !isPanelHiding else { return }
+
+        isPanelHiding = true
+        let startFrame = panel.frame
+        var targetFrame = startFrame
+        targetFrame.origin.y += StatusBarConfig.panelAnimationOffset
+
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = StatusBarConfig.panelAnimationDuration
+            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            panel.animator().alphaValue = 0
+            panel.animator().setFrame(targetFrame, display: true)
+        } completionHandler: { [weak self] in
+            Task { @MainActor in
+                guard let self else { return }
+                self.panel.orderOut(nil)
+                self.panel.alphaValue = 1
+                self.panel.setFrame(startFrame, display: false)
+                self.isPanelHiding = false
+            }
+        }
     }
 
     private func updateStatusItemLength() {
@@ -322,15 +367,29 @@ final class StatusItemController: NSObject {
     }
 
     private func positionPanel() {
+        panel.setFrame(panelTargetFrame(), display: true)
+    }
+
+    private func panelTargetFrame() -> NSRect {
         guard let screen = statusItem.button?.window?.screen ?? NSScreen.main else {
-            return
+            return panel.frame
         }
 
         let visibleFrame = screen.visibleFrame
         var frame = panel.frame
         frame.origin.x = visibleFrame.maxX - frame.width - StatusBarConfig.topRightScreenMargin.width
         frame.origin.y = visibleFrame.maxY - frame.height - StatusBarConfig.topRightScreenMargin.height
-        panel.setFrame(frame, display: true)
+        return frame
+    }
+}
+
+private final class MenuBarPanel: NSPanel {
+    override var canBecomeKey: Bool {
+        true
+    }
+
+    override var canBecomeMain: Bool {
+        true
     }
 }
 
@@ -427,15 +486,18 @@ extension StatusItemController: NSMenuDelegate {
         let previousItem = menu.addItem(withTitle: "Previous", action: #selector(previousTrackAction), keyEquivalent: "")
         previousItem.target = self
         previousItem.image = NSImage(systemSymbolName: "backward.fill", accessibilityDescription: nil)
+        previousItem.isEnabled = appState.canGoToPreviousTrack
 
         let nextItem = menu.addItem(withTitle: "Next", action: #selector(nextTrackAction), keyEquivalent: "")
         nextItem.target = self
         nextItem.image = NSImage(systemSymbolName: "forward.fill", accessibilityDescription: nil)
+        nextItem.isEnabled = appState.canGoToNextTrack
 
         let shuffleTitle = appState.isShuffleEnabled ? "Disable Shuffle" : "Enable Shuffle"
         let shuffleItem = menu.addItem(withTitle: shuffleTitle, action: #selector(toggleShuffleAction(_:)), keyEquivalent: "")
         shuffleItem.target = self
         shuffleItem.image = NSImage(systemSymbolName: "shuffle", accessibilityDescription: nil)
+        shuffleItem.isEnabled = appState.canShuffle
 
         let stations = appState.stations.prefix(2)
         if !stations.isEmpty {

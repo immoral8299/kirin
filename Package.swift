@@ -4,13 +4,13 @@
 import PackageDescription
 
 let package = Package(
-    name: "PlexTray",
+    name: "Kirin",
     platforms: [
         .macOS(.v13),
     ],
     products: [
         .executable(
-            name: "PlexTray",
+            name: "Kirin",
             targets: ["MenuBarPlexClient"]
         ),
     ],

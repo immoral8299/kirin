@@ -7,6 +7,9 @@ struct NowPlayingCard: View, Equatable {
     let playbackPosition: Double
     let playbackDuration: Double
     let isShuffleEnabled: Bool
+    let canGoToPreviousTrack: Bool
+    let canGoToNextTrack: Bool
+    let canShuffle: Bool
     let onPlayPause: () -> Void
     let onNext: () -> Void
     let onPrevious: () -> Void
@@ -21,7 +24,10 @@ struct NowPlayingCard: View, Equatable {
             lhs.playbackProgress == rhs.playbackProgress &&
             lhs.playbackPosition == rhs.playbackPosition &&
             lhs.playbackDuration == rhs.playbackDuration &&
-            lhs.isShuffleEnabled == rhs.isShuffleEnabled
+            lhs.isShuffleEnabled == rhs.isShuffleEnabled &&
+            lhs.canGoToPreviousTrack == rhs.canGoToPreviousTrack &&
+            lhs.canGoToNextTrack == rhs.canGoToNextTrack &&
+            lhs.canShuffle == rhs.canShuffle
     }
 
     var body: some View {
@@ -60,14 +66,14 @@ struct NowPlayingCard: View, Equatable {
                     Spacer(minLength: 0)
 
                     HStack(spacing: 16) {
-                        transportButton(icon: "backward.fill", action: onPrevious)
+                        transportButton(icon: "backward.fill", isEnabled: canGoToPreviousTrack, action: onPrevious)
                         transportButton(
                             icon: PlaybackStateIcon.actionSystemImageName(for: playbackState),
                             showsProgress: playbackState == .buffering,
                             action: onPlayPause
                         )
-                        transportButton(icon: "forward.fill", action: onNext)
-                        transportButton(icon: "shuffle", isActive: isShuffleEnabled, action: onToggleShuffle)
+                        transportButton(icon: "forward.fill", isEnabled: canGoToNextTrack, action: onNext)
+                        transportButton(icon: "shuffle", isActive: isShuffleEnabled, isEnabled: canShuffle, action: onToggleShuffle)
                     }
                     .frame(maxWidth: .infinity, alignment: .center)
                 }
@@ -115,6 +121,7 @@ struct NowPlayingCard: View, Equatable {
     private func transportButton(
         icon: String,
         isActive: Bool = false,
+        isEnabled: Bool = true,
         showsProgress: Bool = false,
         action: @escaping () -> Void
     ) -> some View {
@@ -131,10 +138,13 @@ struct NowPlayingCard: View, Equatable {
             }
             .frame(minWidth: 44, minHeight: 44)
             .background((isActive ? AppTheme.accentActiveBackground : AppTheme.transportFill), in: Circle())
+            .opacity(isEnabled ? 1 : 0.42)
         }
         .buttonStyle(.plain)
-        .interactiveCursor()
-        .foregroundStyle(isActive ? AppTheme.accent : Color.primary)
+        .focusable(false)
+        .disabled(!isEnabled)
+        .interactiveCursor(disabled: !isEnabled)
+        .foregroundStyle(isEnabled ? (isActive ? AppTheme.accent : Color.primary) : Color.secondary.opacity(0.72))
     }
 
     private var trackNumberLabel: String? {

@@ -1,12 +1,12 @@
 import SwiftUI
 
 struct RelatedAlbumsSection: View {
-    let albums: [PlexAlbum]
+    let albums: [MediaAlbum]
     let pendingPlaybackID: String?
     let pendingPlaybackSource: String?
-    let onSelect: (PlexAlbum) -> Void
-    let onPlayNext: (PlexAlbum) -> Void
-    let onAddToQueue: (PlexAlbum) -> Void
+    let onSelect: (MediaAlbum) -> Void
+    let onPlayNext: (MediaAlbum) -> Void
+    let onAddToQueue: (MediaAlbum) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -14,7 +14,7 @@ struct RelatedAlbumsSection: View {
                 .font(.system(size: 12, weight: .bold, design: .rounded))
 
             HStack(alignment: .top, spacing: 10) {
-                ForEach(Array(albums.prefix(3))) { album in
+                ForEach(Array(albums.prefix(4))) { album in
                     VStack(alignment: .leading, spacing: 6) {
                         Button {
                             onSelect(album)

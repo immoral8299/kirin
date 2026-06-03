@@ -2,7 +2,7 @@ import Foundation
 import Security
 
 struct KeychainStore {
-    private let service = "com.menubarplexclient.auth"
+    private let service = "com.kirin.auth"
 
     func save(_ value: String, key: String) {
         let data = Data(value.utf8)

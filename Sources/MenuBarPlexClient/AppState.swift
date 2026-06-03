@@ -1,4 +1,5 @@
 import AVFoundation
+import Combine
 import Foundation
 
 @MainActor
@@ -12,7 +13,8 @@ final class AppState {
     let timelineTracker: TimelineTracker
 
     private let context: StoreContext
-    private let apiClient: PlexService
+    private var mediaService: MediaService
+    private var cancellables = Set<AnyCancellable>()
 
     // MARK: - Forwarded computed properties
 
@@ -22,26 +24,70 @@ final class AppState {
     var playbackDuration: Double { playbackEngine.playbackDuration }
     var pendingSeekProgress: Double? { playbackEngine.pendingSeekProgress }
     var isShuffleEnabled: Bool { queueManager.isShuffleEnabled }
-    var recentlyPlayedAlbums: [PlexAlbum] { libraryStore.recentlyPlayedAlbums }
-    var recentlyAddedAlbums: [PlexAlbum] { libraryStore.recentlyAddedAlbums }
-    var playlists: [PlexPlaylist] { libraryStore.playlists }
-    var stations: [PlexStation] { libraryStore.stations }
+    var recentlyPlayedAlbums: [MediaAlbum] { libraryStore.recentlyPlayedAlbums }
+    var recentlyAddedAlbums: [MediaAlbum] { libraryStore.recentlyAddedAlbums }
+    var playlists: [MediaPlaylist] { libraryStore.playlists }
+    var stations: [MediaStation] { libraryStore.stations }
     var isLoadingLibrary: Bool { libraryStore.isLoadingLibrary }
     var libraryLoadError: LibraryLoadError? { libraryStore.libraryLoadError }
-    var availableServers: [PlexServer] { libraryStore.availableServers }
-    var availableLibraries: [PlexMusicLibrary] { libraryStore.availableLibraries }
+    var availableServers: [MediaServer] { libraryStore.availableServers }
+    var availableLibraries: [MediaMusicLibrary] { libraryStore.availableLibraries }
     var currentLoadingMessage: String? { libraryStore.currentLoadingMessage }
-    var visiblePlayQueue: [PlexTrack] { queueManager.visiblePlayQueue }
-    var relatedAlbums: [PlexAlbum] { libraryStore.relatedAlbums }
+    var visiblePlayQueue: [MediaTrack] { queueManager.visiblePlayQueue }
+    var relatedAlbums: [MediaAlbum] { libraryStore.relatedAlbums }
     var isQueueOperationInProgress: Bool { queueManager.isQueueOperationInProgress }
+    var canGoToPreviousTrack: Bool { queueManager.canGoToPreviousTrack }
+    var canGoToNextTrack: Bool { queueManager.canGoToNextTrack }
+    var canShuffle: Bool { queueManager.canShuffle }
     var shouldPresentInitialLoadFailure: Bool { libraryStore.shouldPresentInitialLoadFailure }
 
     // MARK: - Init
 
     init() {
         authService = PlexAuthService()
-        apiClient = PlexService(authService: authService)
-        context = StoreContext(mediaService: apiClient, settingsStore: settingsStore)
+
+        if settingsStore.settings.mediaSource == .unspecified {
+            if authService.authToken != nil {
+                settingsStore.settings.mediaSource = .plex
+            } else if settingsStore.settings.navidromeConfig.isFilled {
+                settingsStore.settings.mediaSource = .navidrome
+            }
+        }
+
+        let seedSettings = settingsStore.settings
+        switch settingsStore.settings.mediaSource {
+        case .plex:
+            if case let .authenticated(username) = authService.status.state {
+                settingsStore.switchProfile(
+                    to: SettingsStore.plexProfileKey(username: username),
+                    seed: seedSettings
+                )
+                settingsStore.settings.mediaSource = .plex
+            }
+        case .navidrome:
+            let config = settingsStore.settings.navidromeConfig
+            if config.isFilled {
+                settingsStore.switchProfile(
+                    to: SettingsStore.navidromeProfileKey(connectionName: config.name),
+                    seed: seedSettings
+                )
+                settingsStore.settings.mediaSource = .navidrome
+                settingsStore.settings.navidromeConfig = config
+            }
+        case .unspecified:
+            break
+        }
+
+        if settingsStore.settings.mediaSource == .navidrome, settingsStore.settings.navidromeConfig.isFilled {
+            let config = settingsStore.settings.navidromeConfig
+            let keychain = KeychainStore()
+            let password = keychain.read(key: config.keychainKey) ?? ""
+            mediaService = NavidromeService(config: config, password: password)
+        } else {
+            mediaService = PlexService(authService: authService)
+        }
+
+        context = StoreContext(mediaService: mediaService, settingsStore: settingsStore)
         libraryStore = LibraryStore(context: context)
         playbackEngine = PlaybackEngine(context: context)
         queueManager = QueueManager(context: context)
@@ -53,11 +99,28 @@ final class AppState {
         context.timelineTracker = timelineTracker
 
         playbackEngine.delegate = self
+        bindAuthProfileUpdates()
 
-        if authService.authToken != nil {
+        switch settingsStore.settings.mediaSource {
+        case .plex where authService.authToken != nil:
             Task {
                 await libraryStore.reloadPlexData()
             }
+        case .navidrome:
+            Task {
+                await libraryStore.reloadData()
+            }
+        default:
+            break
+        }
+    }
+
+    private func migrateMediaSourceIfNeeded() {
+        guard settingsStore.settings.mediaSource == .unspecified else { return }
+        if authService.authToken != nil {
+            settingsStore.settings.mediaSource = .plex
+        } else if settingsStore.settings.navidromeConfig.isFilled {
+            settingsStore.settings.mediaSource = .navidrome
         }
     }
 
@@ -75,6 +138,19 @@ final class AppState {
         return trimmedUsername.isEmpty ? nil : trimmedUsername
     }
 
+    var activeMediaSource: ActiveMediaSource {
+        get { settingsStore.settings.mediaSource }
+        set { settingsStore.settings.mediaSource = newValue }
+    }
+
+    var isConfigured: Bool {
+        switch activeMediaSource {
+        case .unspecified: return false
+        case .plex: return authService.authToken != nil
+        case .navidrome: return settingsStore.settings.navidromeConfig.isFilled
+        }
+    }
+
     var isAuthenticated: Bool { authService.authToken != nil }
     var isLoudnessLevelingEnabled: Bool { settingsStore.settings.loudnessLevelingEnabled }
     var listenedThresholdPercentage: Int { timelineTracker.listenedThresholdPercentage }
@@ -88,6 +164,10 @@ final class AppState {
     var currentPlayQueueTrackID: String? { queueManager.currentPlayQueueTrackID }
 
     var statusLine: String {
+        guard isConfigured else {
+            return "Configure connection"
+        }
+
         if !shouldPreserveNowPlayingStatus,
            let transientStatusLine {
             return transientStatusLine
@@ -117,9 +197,7 @@ final class AppState {
             return "Waiting for login..."
         case let .failed(message):
             return message
-        case .idle:
-            return isLoadingLibrary ? "Loading library..." : nil
-        case .authenticated:
+        case .idle, .authenticated:
             if isLoadingLibrary {
                 return currentLoadingStatusLine
             }
@@ -150,13 +228,55 @@ final class AppState {
     // MARK: - Auth
 
     func beginPlexLogin() {
+        settingsStore.settings.mediaSource = .plex
+        switchMediaService(to: PlexService(authService: authService))
         Task {
             await authService.beginLogin()
+            activatePlexSettingsProfile()
+            settingsStore.settings.mediaSource = .plex
             await libraryStore.reloadPlexData()
         }
     }
 
+    func verifyNavidromeConnection(config: NavidromeServerConfig, password: String) async throws {
+        let baseURL = URL(string: config.publicUrl ?? config.url) ?? URL(string: config.url)!
+        let client = SubsonicClient(baseURL: baseURL, username: config.username, password: password, session: .shared)
+        let response = try await client.ping()
+        guard response.status == "ok" else {
+            throw NavidromeError.authenticationFailed
+        }
+    }
+
+    func configureNavidrome(_ config: NavidromeServerConfig, password: String) {
+        let keychain = KeychainStore()
+        keychain.save(password, key: config.keychainKey)
+        var seedSettings = AppSettings.default
+        seedSettings.mediaSource = .navidrome
+        seedSettings.navidromeConfig = config
+        settingsStore.switchProfile(
+            to: SettingsStore.navidromeProfileKey(connectionName: config.name),
+            seed: seedSettings
+        )
+        settingsStore.settings.mediaSource = .navidrome
+        settingsStore.settings.navidromeConfig = config
+        settingsStore.settings.selectedServerID = nil
+        settingsStore.settings.selectedLibraryID = nil
+        switchMediaService(to: NavidromeService(config: config, password: password))
+        libraryStore.resetContent()
+        queueManager.resetQueue()
+        playbackEngine.stopPlayback()
+        playbackEngine.resetForNewTrack()
+        Task {
+            await libraryStore.reloadData()
+        }
+    }
+
     func signOut() {
+        let keychain = KeychainStore()
+        if settingsStore.settings.navidromeConfig.isFilled {
+            keychain.delete(key: settingsStore.settings.navidromeConfig.keychainKey)
+        }
+
         timelineTracker.stopTracking()
         playbackEngine.stopPlayback()
         playbackEngine.resetForNewTrack()
@@ -165,6 +285,8 @@ final class AppState {
         authService.signOut()
         settingsStore.settings.selectedServerID = nil
         settingsStore.settings.selectedLibraryID = nil
+        settingsStore.settings.mediaSource = .unspecified
+        settingsStore.settings.navidromeConfig = .default
         libraryStore.availableServers = []
         libraryStore.availableLibraries = []
         libraryStore.recentlyPlayedAlbums = []
@@ -175,6 +297,38 @@ final class AppState {
         libraryStore.currentLoadingMessage = nil
         libraryStore.shouldPresentInitialLoadFailure = false
         playbackEngine.clearCaches()
+    }
+
+    private func switchMediaService(to service: MediaService) {
+        mediaService = service
+        context.mediaService = service
+    }
+
+    private func activatePlexSettingsProfile(seed: AppSettings? = nil) {
+        guard let username = authenticatedUsername else { return }
+        settingsStore.switchProfile(
+            to: SettingsStore.plexProfileKey(username: username),
+            seed: seed
+        )
+    }
+
+    private func bindAuthProfileUpdates() {
+        authService.$status
+            .sink { [weak self] status in
+                guard let self,
+                      self.settingsStore.settings.mediaSource == .plex,
+                      case let .authenticated(username) = status.state,
+                      !username.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                    return
+                }
+
+                self.settingsStore.switchProfile(
+                    to: SettingsStore.plexProfileKey(username: username),
+                    seed: self.settingsStore.settings
+                )
+                self.settingsStore.settings.mediaSource = .plex
+            }
+            .store(in: &cancellables)
     }
 
     // MARK: - Server & Library
@@ -239,31 +393,27 @@ final class AppState {
 
     // MARK: - Playables
 
-    func playAlbum(_ album: PlexAlbum) {
+    func playAlbum(_ album: MediaAlbum) {
         queueManager.playAlbum(album)
     }
 
-    func playAlbum(_ album: PlexAlbum, source: String?) {
-        queueManager.playAlbum(album, source: source)
-    }
-
-    func playPlaylist(_ playlist: PlexPlaylist) {
+    func playPlaylist(_ playlist: MediaPlaylist) {
         queueManager.playPlaylist(playlist)
     }
 
-    func playStation(_ station: PlexStation) {
+    func playStation(_ station: MediaStation) {
         queueManager.playStation(station)
     }
 
-    func enqueueAlbum(_ album: PlexAlbum, playNext: Bool) {
+    func enqueueAlbum(_ album: MediaAlbum, playNext: Bool) {
         queueManager.enqueueAlbum(album, playNext: playNext)
     }
 
-    func enqueuePlaylist(_ playlist: PlexPlaylist, playNext: Bool) {
+    func enqueuePlaylist(_ playlist: MediaPlaylist, playNext: Bool) {
         queueManager.enqueuePlaylist(playlist, playNext: playNext)
     }
 
-    func enqueueStation(_ station: PlexStation, playNext: Bool) {
+    func enqueueStation(_ station: MediaStation, playNext: Bool) {
         queueManager.enqueueStation(station, playNext: playNext)
     }
 
@@ -271,14 +421,8 @@ final class AppState {
         queueManager.playStationRecommendation(recommendation)
     }
 
-    func enqueueStationRecommendation(_ recommendation: PlexStationRecommendation) {
-        queueManager.enqueueStationRecommendation(recommendation)
-    }
-
-    // MARK: - Queue
-
-    func refreshPlayQueue() {
-        queueManager.refreshPlayQueue()
+    func enqueueStationRecommendation(_ recommendation: PlexStationRecommendation, playNext: Bool) {
+        queueManager.enqueueStationRecommendation(recommendation, playNext: playNext)
     }
 
     func selectPlayQueueTrack(id: String) {

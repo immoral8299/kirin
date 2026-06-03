@@ -3,7 +3,7 @@ import Combine
 import SwiftUI
 
 @main
-struct PlexTrayApp: App {
+struct KirinApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     private let appState: AppState
 

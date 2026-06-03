@@ -2,8 +2,8 @@ import Foundation
 
 struct PlexNetworkClient {
     private let session: URLSession
-    private let clientIdentifier = "plextray"
-    private let productName = "PlexTray"
+    private let clientIdentifier = "Kirin"
+    private let productName = "Kirin"
 
     init(session: URLSession = .shared) {
         self.session = session

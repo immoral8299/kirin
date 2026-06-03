@@ -3,8 +3,8 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-APP_NAME="PlexTray"
-PRODUCT_NAME="PlexTray"
+APP_NAME="Kirin"
+PRODUCT_NAME="Kirin"
 FALLBACK_EXECUTABLE_NAME="MenuBarPlexClient"
 DIST_DIR="$ROOT_DIR/dist"
 BUILD_DIR="$DIST_DIR/build"
@@ -15,15 +15,15 @@ RESOURCES_DIR="$CONTENTS_DIR/Resources"
 DMG_STAGING_DIR="$BUILD_DIR/dmg-root"
 ZIP_PATH="$DIST_DIR/$APP_NAME.zip"
 DMG_PATH="$DIST_DIR/$APP_NAME.dmg"
-INFO_PLIST_TEMPLATE="$ROOT_DIR/Packaging/PlexTray-Info.plist"
+INFO_PLIST_TEMPLATE="$ROOT_DIR/Packaging/Kirin-Info.plist"
 INFO_PLIST_PATH="$CONTENTS_DIR/Info.plist"
-ICON_SVG_PATH="$ROOT_DIR/Packaging/PlexTray.svg"
-ICON_PATH="$RESOURCES_DIR/PlexTray.icns"
+ICON_SVG_PATH="$ROOT_DIR/Packaging/Kirin.svg"
+ICON_PATH="$RESOURCES_DIR/Kirin.icns"
 ICON_BUILD_SCRIPT="$ROOT_DIR/scripts/build-icns-from-svg.sh"
 
 VERSION="${VERSION:-0.1.0}"
 BUILD_NUMBER="${BUILD_NUMBER:-1}"
-BUNDLE_ID="${BUNDLE_ID:-com.plextray.app}"
+BUNDLE_ID="${BUNDLE_ID:-com.Kirin.app}"
 SIGNING_IDENTITY="${SIGNING_IDENTITY:-}"
 NOTARY_PROFILE="${NOTARY_PROFILE:-}"
 
@@ -60,8 +60,8 @@ fi
 
 echo "Generating app icon from SVG"
 "$ICON_BUILD_SCRIPT" "$ICON_SVG_PATH" "$ICON_PATH"
-/usr/libexec/PlistBuddy -c "Add :CFBundleIconFile string PlexTray.icns" "$INFO_PLIST_PATH" || \
-    /usr/libexec/PlistBuddy -c "Set :CFBundleIconFile PlexTray.icns" "$INFO_PLIST_PATH"
+/usr/libexec/PlistBuddy -c "Add :CFBundleIconFile string Kirin.icns" "$INFO_PLIST_PATH" || \
+    /usr/libexec/PlistBuddy -c "Set :CFBundleIconFile Kirin.icns" "$INFO_PLIST_PATH"
 
 if [[ -n "$SIGNING_IDENTITY" ]]; then
     echo "Signing $APP_NAME.app"

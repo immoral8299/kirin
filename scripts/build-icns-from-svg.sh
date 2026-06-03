@@ -9,7 +9,7 @@ fi
 
 SOURCE_SVG="$1"
 OUTPUT_ICNS="$2"
-WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/plextray-icon.XXXXXX")"
+WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/kirin-icon.XXXXXX")"
 
 trap 'rm -rf "$WORK_DIR"' EXIT
 

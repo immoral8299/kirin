@@ -55,10 +55,10 @@ struct ChooseServerCard: View {
     private var greetingTitle: String {
         if case let .authenticated(username) = authService.status.state {
             let username = username.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !username.isEmpty else { return "Welcome to PlexTray" }
+            guard !username.isEmpty else { return "Welcome to Kirin" }
             return "Welcome, \(username)"
         }
 
-        return "Welcome to PlexTray"
+        return "Welcome to Kirin"
     }
 }

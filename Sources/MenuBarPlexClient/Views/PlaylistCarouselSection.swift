@@ -2,12 +2,12 @@ import SwiftUI
 
 struct PlaylistCarouselSection: View {
     let title: String
-    let items: [PlexPlaylist]
+    let items: [MediaPlaylist]
     let pageSize: Int
     let pendingPlaybackID: String?
-    let onSelect: (PlexPlaylist) -> Void
-    let onPlayNext: (PlexPlaylist) -> Void
-    let onAddToQueue: (PlexPlaylist) -> Void
+    let onSelect: (MediaPlaylist) -> Void
+    let onPlayNext: (MediaPlaylist) -> Void
+    let onAddToQueue: (MediaPlaylist) -> Void
     @State private var page = 0
 
     var body: some View {
@@ -65,7 +65,7 @@ struct PlaylistCarouselSection: View {
         return (items.count - 1) / pageSize
     }
 
-    private var currentItems: [PlexPlaylist?] {
+    private var currentItems: [MediaPlaylist?] {
         let start = page * pageSize
         guard start < items.count else {
             return Array(repeating: nil, count: pageSize)

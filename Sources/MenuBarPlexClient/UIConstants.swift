@@ -19,7 +19,7 @@ enum AppTheme {
     static let overlayStrong = adaptiveColor(light: NSColor.black.withAlphaComponent(0.12), dark: NSColor.black.withAlphaComponent(0.28))
     static let transportFill = adaptiveColor(light: NSColor.black.withAlphaComponent(0.12), dark: NSColor.black.withAlphaComponent(0.32))
     static let artworkPlaceholder = adaptiveColor(light: NSColor.black.withAlphaComponent(0.08), dark: NSColor.white.withAlphaComponent(0.12))
-    static let onAccent = Color.black
+    static let onAccent = adaptiveColor(light: NSColor.white, dark: NSColor.black)
 
     private static func adaptiveColor(light: NSColor, dark: NSColor) -> Color {
         Color(nsColor: NSColor(name: nil) { appearance in

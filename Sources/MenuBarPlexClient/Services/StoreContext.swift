@@ -2,7 +2,7 @@ import Foundation
 
 @MainActor
 final class StoreContext {
-    let mediaService: MediaService
+    var mediaService: MediaService
     let settingsStore: SettingsStore
     weak var playbackEngine: PlaybackEngine?
     weak var queueManager: QueueManager?
@@ -10,6 +10,7 @@ final class StoreContext {
     weak var timelineTracker: TimelineTracker?
 
     var plexService: PlexService? { mediaService as? PlexService }
+    var navidromeService: NavidromeService? { mediaService as? NavidromeService }
 
     init(mediaService: MediaService, settingsStore: SettingsStore) {
         self.mediaService = mediaService

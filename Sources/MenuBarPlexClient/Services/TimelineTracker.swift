@@ -3,7 +3,7 @@ import Foundation
 @MainActor
 final class TimelineTracker {
     private let context: StoreContext
-    private var trackedTrack: PlexTrack?
+    private var trackedTrack: MediaTrack?
     private var hasMarkedTrackedTrackListened = false
     private var periodicReportingTask: Task<Void, Never>?
     private var timelineRequestTask: Task<Void, Never>?
@@ -27,7 +27,7 @@ final class TimelineTracker {
         markTrackedTrackListenedIfNeeded()
     }
 
-    func beginTracking(_ track: PlexTrack) {
+    func beginTracking(_ track: MediaTrack) {
         guard trackedTrack?.id != track.id else { return }
         stopTrackingCurrentTrack()
         trackedTrack = track
@@ -71,8 +71,7 @@ final class TimelineTracker {
     }
 
     func reportTrackedPlaybackTimeline(state: PlaybackState) {
-        guard let track = trackedTrack,
-              let ratingKey = track.ratingKey else {
+        guard let track = trackedTrack else {
             return
         }
 
@@ -84,8 +83,8 @@ final class TimelineTracker {
 
             do {
                 try await context.mediaService.reportPlaybackTimeline(
-                    ratingKey: ratingKey,
-                    playQueueID: context.queueManager?.hasEditablePlayQueue == true ? 0 : nil,
+                    ratingKey: track.ratingKey ?? track.id,
+                    playQueueID: context.queueManager?.currentServerPlayQueueID,
                     playQueueItemID: track.playQueueItemID,
                     state: state,
                     positionMilliseconds: positionMilliseconds,
@@ -99,8 +98,7 @@ final class TimelineTracker {
 
     func markTrackedTrackListenedIfNeeded(force: Bool = false) {
         guard !hasMarkedTrackedTrackListened,
-              let track = trackedTrack,
-              let ratingKey = track.ratingKey else {
+              let track = trackedTrack else {
             return
         }
 
@@ -114,7 +112,7 @@ final class TimelineTracker {
         hasMarkedTrackedTrackListened = true
         Task {
             do {
-                try await context.mediaService.markTrackListened(ratingKey: ratingKey)
+                try await context.mediaService.markTrackListened(ratingKey: track.ratingKey ?? track.id)
                 logDebug("Marked \(track.title) listened at \(Int(listenedPercentage.rounded()))%")
             } catch {
                 if trackedTrack?.id == track.id {
@@ -127,7 +125,7 @@ final class TimelineTracker {
 
     // MARK: - Private
 
-    private func resolvedDurationMilliseconds(for track: PlexTrack) -> Int {
+    private func resolvedDurationMilliseconds(for track: MediaTrack) -> Int {
         if trackedTrack?.id == track.id,
            let playbackDuration = context.playbackEngine?.playbackDuration,
            playbackDuration.isFinite,

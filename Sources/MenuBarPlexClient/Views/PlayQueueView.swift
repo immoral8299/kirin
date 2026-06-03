@@ -2,7 +2,6 @@ import SwiftUI
 
 struct PlayQueueView: View {
     @ObservedObject var queueManager: QueueManager
-    let onRefresh: () -> Void
     let onSelectTrack: (String) -> Void
     let onRemoveTrack: (String) -> Void
     let onMoveTrack: (String, String) -> Void
@@ -25,20 +24,6 @@ struct PlayQueueView: View {
                     ProgressView()
                         .controlSize(.small)
                 }
-
-                Button {
-                    onRefresh()
-                } label: {
-                    Image(systemName: "arrow.clockwise")
-                        .padding(6)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(AppTheme.accent)
-                .disabled(!queueManager.hasEditablePlayQueue || queueManager.isQueueOperationInProgress)
-                .interactiveCursor(disabled: !queueManager.hasEditablePlayQueue || queueManager.isQueueOperationInProgress)
-                .help("Refresh Play Queue")
 
                 Button {
                     onClearUpcomingTracks()
@@ -91,7 +76,7 @@ struct PlayQueueView: View {
         .frame(width: MenuBarLayout.contentWidth, alignment: .leading)
     }
 
-    private func queueRow(_ track: PlexTrack, isUpcoming: Bool) -> some View {
+    private func queueRow(_ track: MediaTrack, isUpcoming: Bool) -> some View {
         let isCurrent = track.id == queueManager.currentPlayQueueTrackID
 
         return HStack(spacing: 8) {
@@ -101,6 +86,7 @@ struct PlayQueueView: View {
                 .frame(width: 16)
 
             Button {
+                showsPlayedTracks = false
                 onSelectTrack(track.id)
             } label: {
                 VStack(alignment: .leading, spacing: 2) {
@@ -146,7 +132,7 @@ struct PlayQueueView: View {
         queueManager.visiblePlayQueue.firstIndex(where: { $0.id == queueManager.currentPlayQueueTrackID }) ?? -1
     }
 
-    private func displayedTracks(currentTrackIndex: Int) -> [PlexTrack] {
+    private func displayedTracks(currentTrackIndex: Int) -> [MediaTrack] {
         guard currentTrackIndex >= 0, !showsPlayedTracks else {
             return queueManager.visiblePlayQueue
         }

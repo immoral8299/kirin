@@ -1,0 +1,24 @@
+{
+  "configurations": [
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:menu-bar-plex-client}",
+      "name": "Debug Kirin",
+      "target": "Kirin",
+      "configuration": "debug",
+      "preLaunchTask": "swift: Build Debug Kirin"
+    },
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:menu-bar-plex-client}",
+      "name": "Release Kirin",
+      "target": "Kirin",
+      "configuration": "release",
+      "preLaunchTask": "swift: Build Release Kirin"
+    }
+  ]
+}

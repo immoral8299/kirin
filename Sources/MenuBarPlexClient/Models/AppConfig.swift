@@ -1,5 +1,48 @@
 import Foundation
 
+enum ActiveMediaSource: String, Codable, CaseIterable, Identifiable {
+    case unspecified
+    case plex
+    case navidrome
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .unspecified: return "Select..."
+        case .plex: return "Plex"
+        case .navidrome: return "Navidrome"
+        }
+    }
+}
+
+struct NavidromeServerConfig: Codable, Equatable {
+    var name: String
+    var url: String
+    var publicUrl: String?
+    var username: String
+
+    /// Scoped key for Keychain: "navidrome.SERVERNAME"
+    var keychainKey: String {
+        "navidrome." + name
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .replacingOccurrences(of: " ", with: "-")
+            .replacingOccurrences(of: "[^a-z0-9-]", with: "", options: .regularExpression)
+    }
+
+    var isFilled: Bool {
+        !name.isEmpty && !url.isEmpty && !username.isEmpty
+    }
+
+    static let `default` = NavidromeServerConfig(
+        name: "",
+        url: "",
+        publicUrl: nil,
+        username: ""
+    )
+}
+
 enum MenuBarField: String, CaseIterable, Codable, Identifiable {
     case albumArtist
     case trackArtistWithFallback
@@ -145,17 +188,23 @@ struct AppSettings: Codable, Equatable {
     var display: DisplaySettings
     var server: ServerSettings
     var playback: PlaybackSettings
+    var mediaSource: ActiveMediaSource
+    var navidromeConfig: NavidromeServerConfig
 
     private enum CodingKeys: String, CodingKey {
         case display
         case server
         case playback
+        case mediaSource
+        case navidromeConfig
     }
 
     init(display: DisplaySettings, server: ServerSettings, playback: PlaybackSettings) {
         self.display = display
         self.server = server
         self.playback = playback
+        self.mediaSource = .unspecified
+        self.navidromeConfig = .default
     }
 
     init(from decoder: Decoder) throws {
@@ -174,6 +223,8 @@ struct AppSettings: Codable, Equatable {
         }
         self.server = try container.decodeIfPresent(ServerSettings.self, forKey: .server) ?? .default
         self.playback = try container.decodeIfPresent(PlaybackSettings.self, forKey: .playback) ?? .default
+        self.mediaSource = try container.decodeIfPresent(ActiveMediaSource.self, forKey: .mediaSource) ?? .unspecified
+        self.navidromeConfig = try container.decodeIfPresent(NavidromeServerConfig.self, forKey: .navidromeConfig) ?? .default
     }
 
     static let `default` = AppSettings(

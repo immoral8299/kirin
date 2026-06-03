@@ -3,10 +3,10 @@ import SwiftUI
 struct EmptyLibraryCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Your Plex library is connected")
+            Text("Library connected")
                 .font(.system(size: 16, weight: .bold, design: .rounded))
 
-            Text("No recent albums or playlists were returned for the selected library yet. Try another library in settings or refresh.")
+            Text("No recent albums or playlists were returned. Try another library in settings or refresh.")
                 .font(.system(size: 12, weight: .medium, design: .rounded))
                 .foregroundStyle(.secondary.opacity(0.75))
         }
