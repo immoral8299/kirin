@@ -237,6 +237,10 @@ final class PlaybackEngine: ObservableObject {
     }
 
     private func canResolveLoudnessGain(for track: MediaTrack) -> Bool {
+        if context.mediaService is LocalService {
+            return false
+        }
+
         if let plexService = context.mediaService as? PlexService {
             guard context.libraryStore?.selectedPlexServer != nil,
                   context.libraryStore?.selectedPlexLibrary != nil,
@@ -256,6 +260,10 @@ final class PlaybackEngine: ObservableObject {
     }
 
     private func fetchLoudnessGain(for loudnessID: String, track: MediaTrack) async throws -> Float? {
+        if context.mediaService is LocalService {
+            return nil
+        }
+
         if let plexService = context.mediaService as? PlexService {
             guard let server = context.libraryStore?.selectedPlexServer,
                   context.libraryStore?.selectedPlexLibrary != nil,

@@ -78,16 +78,18 @@ final class AppState {
             } else {
                 settingsStore.settings.mediaSource = .unspecified
             }
-        case .unspecified:
+        case .local, .unspecified:
             break
         }
 
-        if settingsStore.settings.mediaSource == .navidrome,
-           Self.hasStoredNavidromePassword(config: settingsStore.settings.navidromeConfig, keychain: keychain) {
+        switch settingsStore.settings.mediaSource {
+        case .navidrome where Self.hasStoredNavidromePassword(config: settingsStore.settings.navidromeConfig, keychain: keychain):
             let config = settingsStore.settings.navidromeConfig
             let password = keychain.read(key: config.keychainKey) ?? ""
             mediaService = NavidromeService(config: config, password: password)
-        } else {
+        case .local:
+            mediaService = LocalService()
+        default:
             mediaService = PlexService(authService: authService)
         }
 
@@ -128,6 +130,10 @@ final class AppState {
         }
     }
 
+    // MARK: - Local mode
+
+    var isLocalMode: Bool { activeMediaSource == .local }
+
     // MARK: - Computed properties
 
     var selectedServerID: String? { settingsStore.settings.selectedServerID }
@@ -153,6 +159,7 @@ final class AppState {
         case .plex: return authService.authToken != nil
         case .navidrome:
             return settingsStore.settings.navidromeConfig.isFilled && hasStoredNavidromePassword()
+        case .local: return true
         }
     }
 
@@ -305,6 +312,24 @@ final class AppState {
         libraryStore.currentLoadingMessage = nil
         libraryStore.shouldPresentInitialLoadFailure = false
         playbackEngine.clearCaches()
+    }
+
+    func configureLocalFiles() {
+        settingsStore.settings.mediaSource = .local
+        settingsStore.settings.selectedServerID = nil
+        settingsStore.settings.selectedLibraryID = nil
+        switchMediaService(to: LocalService())
+        libraryStore.resetContent()
+        queueManager.resetQueue()
+        playbackEngine.stopPlayback()
+        playbackEngine.resetForNewTrack()
+    }
+
+    func importLocalFiles() async {
+        let tracks = await LocalFileImporter.selectFilesAndFolders()
+        guard !tracks.isEmpty else { return }
+        configureLocalFiles()
+        queueManager.playTracks(tracks, startingAt: tracks.first?.id)
     }
 
     private func switchMediaService(to service: MediaService) {

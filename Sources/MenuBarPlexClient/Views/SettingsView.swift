@@ -10,48 +10,17 @@ struct SettingsView: View {
     let onSetLoudnessLevelingEnabled: (Bool) -> Void
     let onSetListenedThresholdPercentage: (Int) -> Void
     let onSignOut: () -> Void
+    var onImportLocalFiles: (() -> Void)?
 
     var body: some View {
         VStack(spacing: 12) {
             settingsHeader
 
             VStack(alignment: .leading, spacing: 16) {
-                if isPlexSource {
-                    settingsSection("Library") {
-                        pickerRow("Server", selection: serverSelectionBinding, items: libraryStore.availableServers.map { ($0.name, Optional($0.id)) })
-                            .disabled(libraryStore.availableServers.isEmpty)
-                        dividerRow
-                        pickerRow("Music Library", selection: librarySelectionBinding, items: libraryStore.availableLibraries.map { ($0.title, Optional($0.id)) })
-                            .disabled(libraryStore.availableLibraries.isEmpty)
-                    }
-                }
-
-                settingsSection("Menu Bar Format") {
-                    pickerRow("First String", selection: firstFieldBinding, items: MenuBarField.allCases.map { ($0.displayName, $0) })
-                    dividerRow
-                    pickerRow("Next String", selection: secondFieldBinding, items: MenuBarField.allCases.map { ($0.displayName, $0) })
-                }
-
-                settingsSection("Appearance") {
-                    pickerRow("Theme", selection: themePreferenceBinding, items: AppThemePreference.allCases.map { ($0.displayName, $0) })
-                }
-
-                settingsSection("Visible Sections") {
-                    toggleRow("Recently Played Albums", isOn: showRecentlyPlayedBinding)
-                    dividerRow
-                    toggleRow("Recently Added Albums", isOn: showRecentlyAddedBinding)
-                    if isPlexSource {
-                        dividerRow
-                        toggleRow("Playlists", isOn: showPlaylistsBinding)
-                    }
-                    dividerRow
-                    toggleRow("Stations", isOn: showStationsBinding)
-                }
-
-                settingsSection("Playback") {
-                    toggleRow("Loudness Leveling", isOn: loudnessLevelingBinding)
-                    dividerRow
-                    pickerRow("Scrobble Threshold", selection: listenedThresholdBinding, items: listenedThresholdOptions)
+                if isLocalSource {
+                    localSettingsContent
+                } else {
+                    serverSettingsContent
                 }
 
                 Button {
@@ -85,6 +54,79 @@ struct SettingsView: View {
         .padding(10)
     }
 
+    @ViewBuilder
+    private var localSettingsContent: some View {
+        settingsSection("Music") {
+            Button {
+                onImportLocalFiles?()
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "music.note.list")
+                        .font(.system(size: 13, weight: .semibold))
+                    Text("Choose Music Files or Folders")
+                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.secondary.opacity(0.5))
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+            }
+            .buttonStyle(.plain)
+            .interactiveCursor()
+        }
+
+        settingsSection("Appearance") {
+            pickerRow("Theme", selection: themePreferenceBinding, items: AppThemePreference.allCases.map { ($0.displayName, $0) })
+        }
+
+        settingsSection("Playback") {
+            toggleRow("Loudness Leveling", isOn: loudnessLevelingBinding)
+        }
+    }
+
+    @ViewBuilder
+    private var serverSettingsContent: some View {
+        if isPlexSource {
+            settingsSection("Library") {
+                pickerRow("Server", selection: serverSelectionBinding, items: libraryStore.availableServers.map { ($0.name, Optional($0.id)) })
+                    .disabled(libraryStore.availableServers.isEmpty)
+                dividerRow
+                pickerRow("Music Library", selection: librarySelectionBinding, items: libraryStore.availableLibraries.map { ($0.title, Optional($0.id)) })
+                    .disabled(libraryStore.availableLibraries.isEmpty)
+            }
+        }
+
+        settingsSection("Menu Bar Format") {
+            pickerRow("First String", selection: firstFieldBinding, items: MenuBarField.allCases.map { ($0.displayName, $0) })
+            dividerRow
+            pickerRow("Next String", selection: secondFieldBinding, items: MenuBarField.allCases.map { ($0.displayName, $0) })
+        }
+
+        settingsSection("Appearance") {
+            pickerRow("Theme", selection: themePreferenceBinding, items: AppThemePreference.allCases.map { ($0.displayName, $0) })
+        }
+
+        settingsSection("Visible Sections") {
+            toggleRow("Recently Played Albums", isOn: showRecentlyPlayedBinding)
+            dividerRow
+            toggleRow("Recently Added Albums", isOn: showRecentlyAddedBinding)
+            if isPlexSource {
+                dividerRow
+                toggleRow("Playlists", isOn: showPlaylistsBinding)
+            }
+            dividerRow
+            toggleRow("Stations", isOn: showStationsBinding)
+        }
+
+        settingsSection("Playback") {
+            toggleRow("Loudness Leveling", isOn: loudnessLevelingBinding)
+            dividerRow
+            pickerRow("Scrobble Threshold", selection: listenedThresholdBinding, items: listenedThresholdOptions)
+        }
+    }
+
     private var settingsHeader: some View {
         HStack {
             Text("Settings")
@@ -92,20 +134,22 @@ struct SettingsView: View {
 
             Spacer()
 
-            Button {
-                onRefreshServersAndLibraries()
-            } label: {
-                Image(systemName: "arrow.clockwise")
-                    .padding(6)
-                    .contentShape(Rectangle())
+            if !isLocalSource {
+                Button {
+                    onRefreshServersAndLibraries()
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                        .padding(6)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .focusable(false)
+                .font(.system(size: 12, weight: .semibold))
+                .interactiveCursor(disabled: !canRefreshLibrary)
+                .foregroundStyle(AppTheme.accent)
+                .disabled(!canRefreshLibrary)
+                .help(isPlexSource ? "Refresh Servers and Libraries" : "Refresh Library")
             }
-            .buttonStyle(.plain)
-            .focusable(false)
-            .font(.system(size: 12, weight: .semibold))
-            .interactiveCursor(disabled: !canRefreshLibrary)
-            .foregroundStyle(AppTheme.accent)
-            .disabled(!canRefreshLibrary)
-            .help(isPlexSource ? "Refresh Servers and Libraries" : "Refresh Library")
         }
     }
 
@@ -119,9 +163,13 @@ struct SettingsView: View {
             return authService.authToken != nil
         case .navidrome:
             return settingsStore.settings.navidromeConfig.isFilled
-        case .unspecified:
+        case .local, .unspecified:
             return false
         }
+    }
+
+    private var isLocalSource: Bool {
+        settingsStore.settings.mediaSource == .local
     }
 
     private var serverSelectionBinding: Binding<String?> {

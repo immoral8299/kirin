@@ -4,6 +4,7 @@ enum ActiveMediaSource: String, Codable, CaseIterable, Identifiable {
     case unspecified
     case plex
     case navidrome
+    case local
 
     var id: String { rawValue }
 
@@ -12,6 +13,7 @@ enum ActiveMediaSource: String, Codable, CaseIterable, Identifiable {
         case .unspecified: return "Select..."
         case .plex: return "Plex"
         case .navidrome: return "Navidrome"
+        case .local: return "Local Files"
         }
     }
 }

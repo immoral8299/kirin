@@ -53,6 +53,9 @@ final class LibraryStore: ObservableObject {
         if context.mediaService is NavidromeService {
             return availableServers.first?.name
         }
+        if context.mediaService is LocalService {
+            return "Local Files"
+        }
         return nil
     }
 
@@ -62,6 +65,9 @@ final class LibraryStore: ObservableObject {
         }
         if context.mediaService is NavidromeService {
             return availableLibraries.first?.title
+        }
+        if context.mediaService is LocalService {
+            return "Files"
         }
         return nil
     }
@@ -153,6 +159,7 @@ final class LibraryStore: ObservableObject {
     }
 
     func refreshCurrentLibraryContent() {
+        guard context.mediaService is LocalService == false else { return }
         Task {
             if context.plexService != nil {
                 await reloadHomeContentForSelection()
@@ -163,6 +170,7 @@ final class LibraryStore: ObservableObject {
     }
 
     func refreshServersAndLibraries() {
+        guard context.mediaService is LocalService == false else { return }
         Task {
             if context.plexService != nil {
                 await refreshCurrentSelection()

@@ -28,6 +28,7 @@ final class TimelineTracker {
     }
 
     func beginTracking(_ track: MediaTrack) {
+        guard context.mediaService is LocalService == false else { return }
         guard trackedTrack?.id != track.id else { return }
         stopTrackingCurrentTrack()
         trackedTrack = track

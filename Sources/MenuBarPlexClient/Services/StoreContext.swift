@@ -11,6 +11,7 @@ final class StoreContext {
 
     var plexService: PlexService? { mediaService as? PlexService }
     var navidromeService: NavidromeService? { mediaService as? NavidromeService }
+    var localService: LocalService? { mediaService as? LocalService }
 
     init(mediaService: MediaService, settingsStore: SettingsStore) {
         self.mediaService = mediaService

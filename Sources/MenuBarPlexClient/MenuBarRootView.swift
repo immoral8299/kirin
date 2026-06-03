@@ -28,7 +28,7 @@ struct MenuBarRootView: View {
     @ObservedObject var panelState: PanelState
     @ObservedObject private var authService: PlexAuthService
     @ObservedObject private var settingsStore: SettingsStore
-    @State private var selectedTab: ContentTab = .home
+    @State private var selectedTab: ContentTab
 
     init(appState: AppState, panelState: PanelState, onClose: @escaping () -> Void, onPinChange: @escaping (Bool) -> Void) {
         self.appState = appState
@@ -37,6 +37,7 @@ struct MenuBarRootView: View {
         self.onPinChange = onPinChange
         _authService = ObservedObject(wrappedValue: appState.authService)
         _settingsStore = ObservedObject(wrappedValue: appState.settingsStore)
+        _selectedTab = State(initialValue: appState.isLocalMode ? .queue : .home)
     }
 
     var body: some View {
@@ -83,7 +84,8 @@ struct MenuBarRootView: View {
                 onOpenBrowser: authService.reopenBrowser,
                 onConfigureNavidrome: appState.configureNavidrome,
                 onVerifyNavidrome: appState.verifyNavidromeConnection,
-                onPinChange: onPinChange
+                onPinChange: onPinChange,
+                onImportLocalFiles: { Task { await appState.importLocalFiles() } }
             )
         }
     }
@@ -109,10 +111,15 @@ struct MenuBarRootView: View {
             authButton
 
             if appState.isConfigured {
-                tabButton(.home, icon: "house", tooltip: "Home")
-                tabButton(.queue, icon: "list.bullet", tooltip: "Play Queue")
-                tabButton(.search, icon: "magnifyingglass", tooltip: "Search")
-                tabButton(.settings, icon: "gearshape", tooltip: "Settings")
+                if appState.isLocalMode {
+                    tabButton(.queue, icon: "list.bullet", tooltip: "Play Queue")
+                    tabButton(.settings, icon: "gearshape", tooltip: "Settings")
+                } else {
+                    tabButton(.home, icon: "house", tooltip: "Home")
+                    tabButton(.queue, icon: "list.bullet", tooltip: "Play Queue")
+                    tabButton(.search, icon: "magnifyingglass", tooltip: "Search")
+                    tabButton(.settings, icon: "gearshape", tooltip: "Settings")
+                }
             }
         }
         .frame(width: MenuBarLayout.contentWidth, alignment: .leading)
@@ -181,6 +188,30 @@ private struct AuthenticatedContent: View {
                 libraryStore: libraryStore,
                 onSelectServer: appState.selectServer
             )
+        } else if appState.isLocalMode {
+            PlaybackSection(appState: appState)
+
+            switch selectedTab {
+            case .settings:
+                SettingsView(
+                    authService: appState.authService,
+                    settingsStore: appState.settingsStore,
+                    libraryStore: libraryStore,
+                    onSelectServer: appState.selectServer,
+                    onSelectLibrary: appState.selectLibrary,
+                    onRefreshServersAndLibraries: appState.refreshServersAndLibraries,
+                    onSetLoudnessLevelingEnabled: appState.setLoudnessLevelingEnabled,
+                    onSetListenedThresholdPercentage: appState.setListenedThresholdPercentage,
+                    onSignOut: appState.signOut,
+                    onImportLocalFiles: { Task { await appState.importLocalFiles() } }
+                )
+                .frame(width: MenuBarLayout.contentWidth, alignment: .leading)
+                .background(AppTheme.panelFillSoft, in: RoundedRectangle(cornerRadius: AppCornerRadius.medium, style: .continuous))
+            case .queue:
+                QueueContent(appState: appState)
+            default:
+                QueueContent(appState: appState)
+            }
         } else {
             activeLibraryBanner
             connectionBanner
@@ -488,7 +519,9 @@ private struct QueueContent: View {
                 onSelectTrack: appState.selectPlayQueueTrack,
                 onRemoveTrack: appState.removePlayQueueTrack,
                 onMoveTrack: appState.movePlayQueueTrack,
-                onClearUpcomingTracks: appState.clearUpcomingPlayQueueTracks
+                onClearUpcomingTracks: appState.clearUpcomingPlayQueueTracks,
+                isLocalMode: appState.isLocalMode,
+                onImportLocalFiles: { Task { await appState.importLocalFiles() } }
             )
         }
         .animation(.easeInOut(duration: 0.25), value: libraryStore.queueStationRecommendations.count + libraryStore.relatedAlbums.count)

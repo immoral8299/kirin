@@ -6,6 +6,8 @@ struct PlayQueueView: View {
     let onRemoveTrack: (String) -> Void
     let onMoveTrack: (String, String) -> Void
     let onClearUpcomingTracks: () -> Void
+    var isLocalMode: Bool = false
+    var onImportLocalFiles: (() -> Void)?
     @State private var showsPlayedTracks = false
 
     var body: some View {
@@ -65,12 +67,36 @@ struct PlayQueueView: View {
                 }
                 .background(AppTheme.panelFill, in: RoundedRectangle(cornerRadius: AppCornerRadius.card, style: .continuous))
             } else {
-                Text("Start playback from an album, playlist, or station to create an editable queue.")
-                    .font(.system(size: 12, weight: .medium, design: .rounded))
-                    .foregroundStyle(.secondary.opacity(0.74))
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                if isLocalMode {
+                    VStack(spacing: 10) {
+                        Text("No tracks in queue.")
+                            .font(.system(size: 12, weight: .medium, design: .rounded))
+                            .foregroundStyle(.secondary.opacity(0.74))
+
+                        Button {
+                            onImportLocalFiles?()
+                        } label: {
+                            Label("Choose Music", systemImage: "music.note.list")
+                                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 8)
+                                .background(AppTheme.accent, in: Capsule())
+                                .foregroundStyle(AppTheme.onAccent)
+                        }
+                        .buttonStyle(.plain)
+                        .interactiveCursor()
+                    }
+                    .frame(maxWidth: .infinity)
                     .padding(14)
                     .background(AppTheme.panelFill, in: RoundedRectangle(cornerRadius: AppCornerRadius.card, style: .continuous))
+                } else {
+                    Text("Start playback from an album, playlist, or station to create an editable queue.")
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .foregroundStyle(.secondary.opacity(0.74))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(14)
+                        .background(AppTheme.panelFill, in: RoundedRectangle(cornerRadius: AppCornerRadius.card, style: .continuous))
+                }
             }
         }
         .frame(width: MenuBarLayout.contentWidth, alignment: .leading)
