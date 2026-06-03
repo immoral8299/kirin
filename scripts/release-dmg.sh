@@ -15,6 +15,7 @@ RESOURCES_DIR="$CONTENTS_DIR/Resources"
 DMG_STAGING_DIR="$BUILD_DIR/dmg-root"
 ZIP_PATH="$DIST_DIR/$APP_NAME.zip"
 DMG_PATH="$DIST_DIR/$APP_NAME.dmg"
+DMG_RW_PATH="$BUILD_DIR/$APP_NAME-rw.dmg"
 INFO_PLIST_TEMPLATE="$ROOT_DIR/Packaging/Kirin-Info.plist"
 INFO_PLIST_PATH="$CONTENTS_DIR/Info.plist"
 ICON_SVG_PATH="$ROOT_DIR/Packaging/Kirin.svg"
@@ -28,7 +29,7 @@ SIGNING_IDENTITY="${SIGNING_IDENTITY:-}"
 NOTARY_PROFILE="${NOTARY_PROFILE:-}"
 
 mkdir -p "$DIST_DIR"
-rm -rf "$BUILD_DIR" "$ZIP_PATH" "$DMG_PATH"
+rm -rf "$BUILD_DIR" "$ZIP_PATH" "$DMG_PATH" "$DMG_RW_PATH"
 mkdir -p "$MACOS_DIR" "$RESOURCES_DIR" "$DMG_STAGING_DIR"
 
 echo "Building $APP_NAME release binary"
@@ -82,9 +83,19 @@ fi
 
 cp -R "$APP_DIR" "$DMG_STAGING_DIR/"
 ln -s /Applications "$DMG_STAGING_DIR/Applications"
+cp "$ICON_PATH" "$DMG_STAGING_DIR/.VolumeIcon.icns"
+
+if command -v SetFile >/dev/null; then
+    SetFile -a C "$DMG_STAGING_DIR"
+elif xcrun --find SetFile >/dev/null 2>&1; then
+    xcrun SetFile -a C "$DMG_STAGING_DIR"
+else
+    echo "SetFile not found; DMG volume icon file was added but the custom icon bit could not be set" >&2
+fi
 
 echo "Creating DMG"
-hdiutil create -volname "$APP_NAME" -srcfolder "$DMG_STAGING_DIR" -ov -format UDZO "$DMG_PATH"
+hdiutil create -volname "$APP_NAME" -srcfolder "$DMG_STAGING_DIR" -ov -format UDRW "$DMG_RW_PATH"
+hdiutil convert "$DMG_RW_PATH" -format UDZO -ov -o "$DMG_PATH"
 
 if [[ -n "$NOTARY_PROFILE" ]]; then
     echo "Notarizing DMG"
