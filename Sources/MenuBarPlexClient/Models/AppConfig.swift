@@ -154,16 +154,61 @@ enum AppThemePreference: String, CaseIterable, Codable, Identifiable {
     }
 }
 
+enum PanelPositionPreference: String, CaseIterable, Codable, Identifiable {
+    case screenCorner
+    case menuBarItem
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .screenCorner:
+            return "Screen Corner"
+        case .menuBarItem:
+            return "Menu Bar Item"
+        }
+    }
+}
+
 struct DisplaySettings: Codable, Equatable {
     var menuBarFormat: MenuBarFormat
     var sectionVisibility: SectionVisibility
     var themePreference: AppThemePreference
+    var panelPosition: PanelPositionPreference
+
+    private enum CodingKeys: String, CodingKey {
+        case menuBarFormat
+        case sectionVisibility
+        case themePreference
+        case panelPosition
+    }
 
     static let `default` = DisplaySettings(
         menuBarFormat: .default,
         sectionVisibility: .default,
-        themePreference: .system
+        themePreference: .system,
+        panelPosition: .screenCorner
     )
+
+    init(
+        menuBarFormat: MenuBarFormat,
+        sectionVisibility: SectionVisibility,
+        themePreference: AppThemePreference,
+        panelPosition: PanelPositionPreference
+    ) {
+        self.menuBarFormat = menuBarFormat
+        self.sectionVisibility = sectionVisibility
+        self.themePreference = themePreference
+        self.panelPosition = panelPosition
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        menuBarFormat = try container.decodeIfPresent(MenuBarFormat.self, forKey: .menuBarFormat) ?? .default
+        sectionVisibility = try container.decodeIfPresent(SectionVisibility.self, forKey: .sectionVisibility) ?? .default
+        themePreference = try container.decodeIfPresent(AppThemePreference.self, forKey: .themePreference) ?? .system
+        panelPosition = try container.decodeIfPresent(PanelPositionPreference.self, forKey: .panelPosition) ?? .screenCorner
+    }
 }
 
 struct ServerSettings: Codable, Equatable {
@@ -220,7 +265,8 @@ struct AppSettings: Codable, Equatable {
                 sectionVisibility: try container.decodeIfPresent(SectionVisibility.self, forKey: .display)
                     ?? .default,
                 themePreference: try container.decodeIfPresent(AppThemePreference.self, forKey: .display)
-                    ?? .system
+                    ?? .system,
+                panelPosition: .screenCorner
             )
         }
         self.server = try container.decodeIfPresent(ServerSettings.self, forKey: .server) ?? .default
@@ -249,6 +295,10 @@ extension AppSettings {
     var themePreference: AppThemePreference {
         get { display.themePreference }
         set { display.themePreference = newValue }
+    }
+    var panelPosition: PanelPositionPreference {
+        get { display.panelPosition }
+        set { display.panelPosition = newValue }
     }
     var selectedServerID: String? {
         get { server.selectedServerID }

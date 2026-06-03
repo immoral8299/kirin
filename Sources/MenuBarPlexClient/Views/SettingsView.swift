@@ -10,6 +10,7 @@ struct SettingsView: View {
     let onSetLoudnessLevelingEnabled: (Bool) -> Void
     let onSetListenedThresholdPercentage: (Int) -> Void
     let onSignOut: () -> Void
+    let onPanelPositionChange: () -> Void
     var onImportLocalFiles: (() -> Void)?
 
     var body: some View {
@@ -26,7 +27,7 @@ struct SettingsView: View {
                 Button {
                     onSignOut()
                 } label: {
-                    Label("Log Out", systemImage: "rectangle.portrait.and.arrow.right")
+                    Label(signOutTitle, systemImage: signOutIconName)
                         .font(.system(size: 11, weight: .semibold, design: .rounded))
                 }
                 .buttonStyle(.plain)
@@ -79,6 +80,8 @@ struct SettingsView: View {
 
         settingsSection("Appearance") {
             pickerRow("Theme", selection: themePreferenceBinding, items: AppThemePreference.allCases.map { ($0.displayName, $0) })
+            dividerRow
+            pickerRow("Panel Position", selection: panelPositionBinding, items: PanelPositionPreference.allCases.map { ($0.displayName, $0) })
         }
 
         settingsSection("Playback") {
@@ -106,6 +109,8 @@ struct SettingsView: View {
 
         settingsSection("Appearance") {
             pickerRow("Theme", selection: themePreferenceBinding, items: AppThemePreference.allCases.map { ($0.displayName, $0) })
+            dividerRow
+            pickerRow("Panel Position", selection: panelPositionBinding, items: PanelPositionPreference.allCases.map { ($0.displayName, $0) })
         }
 
         settingsSection("Visible Sections") {
@@ -170,6 +175,14 @@ struct SettingsView: View {
 
     private var isLocalSource: Bool {
         settingsStore.settings.mediaSource == .local
+    }
+
+    private var signOutTitle: String {
+        isLocalSource ? "Connect Other Services" : "Log Out"
+    }
+
+    private var signOutIconName: String {
+        isLocalSource ? "point.3.connected.trianglepath.dotted" : "rectangle.portrait.and.arrow.right"
     }
 
     private var serverSelectionBinding: Binding<String?> {
@@ -261,6 +274,15 @@ struct SettingsView: View {
             settingsStore.settings.themePreference
         } set: { newValue in
             settingsStore.settings.themePreference = newValue
+        }
+    }
+
+    private var panelPositionBinding: Binding<PanelPositionPreference> {
+        Binding {
+            settingsStore.settings.panelPosition
+        } set: { newValue in
+            settingsStore.settings.panelPosition = newValue
+            onPanelPositionChange()
         }
     }
 

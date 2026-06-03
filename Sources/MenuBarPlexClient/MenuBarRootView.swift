@@ -25,16 +25,24 @@ struct MenuBarRootView: View {
     let appState: AppState
     let onClose: () -> Void
     let onPinChange: (Bool) -> Void
+    let onPanelPositionChange: () -> Void
     @ObservedObject var panelState: PanelState
     @ObservedObject private var authService: PlexAuthService
     @ObservedObject private var settingsStore: SettingsStore
     @State private var selectedTab: ContentTab
 
-    init(appState: AppState, panelState: PanelState, onClose: @escaping () -> Void, onPinChange: @escaping (Bool) -> Void) {
+    init(
+        appState: AppState,
+        panelState: PanelState,
+        onClose: @escaping () -> Void,
+        onPinChange: @escaping (Bool) -> Void,
+        onPanelPositionChange: @escaping () -> Void
+    ) {
         self.appState = appState
         self.panelState = panelState
         self.onClose = onClose
         self.onPinChange = onPinChange
+        self.onPanelPositionChange = onPanelPositionChange
         _authService = ObservedObject(wrappedValue: appState.authService)
         _settingsStore = ObservedObject(wrappedValue: appState.settingsStore)
         _selectedTab = State(initialValue: appState.isLocalMode ? .queue : .home)
@@ -74,7 +82,11 @@ struct MenuBarRootView: View {
     @ViewBuilder
     private var scrollableContent: some View {
         if appState.isConfigured {
-            AuthenticatedContent(appState: appState, selectedTab: selectedTab)
+            AuthenticatedContent(
+                appState: appState,
+                selectedTab: selectedTab,
+                onPanelPositionChange: onPanelPositionChange
+            )
         } else {
             WelcomeCard(
                 mediaSource: $settingsStore.settings.mediaSource,
@@ -173,11 +185,13 @@ struct MenuBarRootView: View {
 private struct AuthenticatedContent: View {
     let appState: AppState
     let selectedTab: ContentTab
+    let onPanelPositionChange: () -> Void
     @ObservedObject private var libraryStore: LibraryStore
 
-    init(appState: AppState, selectedTab: ContentTab) {
+    init(appState: AppState, selectedTab: ContentTab, onPanelPositionChange: @escaping () -> Void) {
         self.appState = appState
         self.selectedTab = selectedTab
+        self.onPanelPositionChange = onPanelPositionChange
         _libraryStore = ObservedObject(wrappedValue: appState.libraryStore)
     }
 
@@ -203,6 +217,7 @@ private struct AuthenticatedContent: View {
                     onSetLoudnessLevelingEnabled: appState.setLoudnessLevelingEnabled,
                     onSetListenedThresholdPercentage: appState.setListenedThresholdPercentage,
                     onSignOut: appState.signOut,
+                    onPanelPositionChange: onPanelPositionChange,
                     onImportLocalFiles: { Task { await appState.importLocalFiles() } }
                 )
                 .frame(width: MenuBarLayout.contentWidth, alignment: .leading)
@@ -228,7 +243,8 @@ private struct AuthenticatedContent: View {
                     onRefreshServersAndLibraries: appState.refreshServersAndLibraries,
                     onSetLoudnessLevelingEnabled: appState.setLoudnessLevelingEnabled,
                     onSetListenedThresholdPercentage: appState.setListenedThresholdPercentage,
-                    onSignOut: appState.signOut
+                    onSignOut: appState.signOut,
+                    onPanelPositionChange: onPanelPositionChange
                 )
                 .frame(width: MenuBarLayout.contentWidth, alignment: .leading)
                 .background(AppTheme.panelFillSoft, in: RoundedRectangle(cornerRadius: AppCornerRadius.medium, style: .continuous))

@@ -73,6 +73,9 @@ final class StatusItemController: NSObject {
                 },
                 onPinChange: { [weak self] isPinned in
                     self?.isPanelPinned = isPinned
+                },
+                onPanelPositionChange: { [weak self] in
+                    self?.positionPanelIfVisible()
                 }
             )
         )
@@ -324,11 +327,14 @@ final class StatusItemController: NSObject {
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
 
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = StatusBarConfig.panelAnimationDuration
-            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-            panel.animator().alphaValue = 1
-            panel.animator().setFrame(targetFrame, display: true)
+        Task { @MainActor in
+            await Task.yield()
+            await NSAnimationContext.runAnimationGroup { context in
+                context.duration = StatusBarConfig.panelAnimationDuration
+                context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                panel.animator().alphaValue = 1
+                panel.animator().setFrame(targetFrame, display: true)
+            }
         }
     }
 
@@ -360,14 +366,15 @@ final class StatusItemController: NSObject {
         let targetLength = StatusBarConfig.horizontalPadding + StatusBarConfig.iconWidth + StatusBarConfig.iconTextGap + marqueeView.visibleWidth + StatusBarConfig.textContentPadding
 
         statusItem.length = targetLength
-
-        if panel.isVisible {
-            positionPanel()
-        }
     }
 
     private func positionPanel() {
         panel.setFrame(panelTargetFrame(), display: true)
+    }
+
+    private func positionPanelIfVisible() {
+        guard panel.isVisible else { return }
+        positionPanel()
     }
 
     private func panelTargetFrame() -> NSRect {
@@ -377,9 +384,44 @@ final class StatusItemController: NSObject {
 
         let visibleFrame = screen.visibleFrame
         var frame = panel.frame
-        frame.origin.x = visibleFrame.maxX - frame.width - StatusBarConfig.topRightScreenMargin.width
-        frame.origin.y = visibleFrame.maxY - frame.height - StatusBarConfig.topRightScreenMargin.height
+        switch appState.settingsStore.settings.panelPosition {
+        case .screenCorner:
+            frame.origin.x = visibleFrame.maxX - frame.width - StatusBarConfig.topRightScreenMargin.width
+            frame.origin.y = visibleFrame.maxY - frame.height - StatusBarConfig.topRightScreenMargin.height
+        case .menuBarItem:
+            frame.origin = menuBarItemPanelOrigin(
+                for: frame,
+                visibleFrame: visibleFrame
+            ) ?? screenCornerPanelOrigin(for: frame, visibleFrame: visibleFrame)
+        }
         return frame
+    }
+
+    private func screenCornerPanelOrigin(for frame: NSRect, visibleFrame: NSRect) -> NSPoint {
+        NSPoint(
+            x: visibleFrame.maxX - frame.width - StatusBarConfig.topRightScreenMargin.width,
+            y: visibleFrame.maxY - frame.height - StatusBarConfig.topRightScreenMargin.height
+        )
+    }
+
+    private func menuBarItemPanelOrigin(for frame: NSRect, visibleFrame: NSRect) -> NSPoint? {
+        guard let statusButton = statusItem.button,
+              let statusWindow = statusButton.window else {
+            return nil
+        }
+
+        let buttonFrameInWindow = statusButton.convert(statusButton.bounds, to: nil)
+        let buttonFrameInScreen = statusWindow.convertToScreen(buttonFrameInWindow)
+        let margin = StatusBarConfig.topRightScreenMargin
+        let unclampedX = buttonFrameInScreen.midX - (frame.width / 2)
+        let minX = visibleFrame.minX + margin.width
+        let maxX = visibleFrame.maxX - frame.width - margin.width
+        let topY = min(buttonFrameInScreen.minY, visibleFrame.maxY)
+
+        return NSPoint(
+            x: min(max(unclampedX, minX), maxX),
+            y: topY - frame.height - margin.height
+        )
     }
 }
 
