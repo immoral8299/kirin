@@ -257,7 +257,7 @@ struct SettingsView: View {
             .labelsHidden()
             .pickerStyle(.menu)
             .tint(.primary)
-            .frame(maxWidth: 160)
+            .frame(maxWidth: 160, alignment: .trailing)
             .interactiveCursor(disabled: items.isEmpty)
         }
         .padding(.horizontal, 12)
