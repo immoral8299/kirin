@@ -56,6 +56,11 @@ struct MediaHomeContent {
     let stations: [MediaStation]
 }
 
+struct MediaSearchResults {
+    let tracks: [MediaTrack]
+    let albums: [MediaAlbum]
+}
+
 struct PlayQueueSnapshot {
     let id: Int
     let totalCount: Int

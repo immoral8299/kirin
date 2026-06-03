@@ -83,6 +83,7 @@ enum PendingPlaybackID {
     static func album(_ id: String) -> String { "album-\(id)" }
     static func playlist(_ id: String) -> String { "playlist-\(id)" }
     static func station(_ id: String) -> String { "station-\(id)" }
+    static func track(_ id: String) -> String { "track-\(id)" }
     static func recommendation(_ id: String) -> String { "recommendation-\(id)" }
 }
 

@@ -81,6 +81,16 @@ final class QueueManager: ObservableObject {
         }
     }
 
+    func playTracks(_ tracks: [MediaTrack], startingAt trackID: String?) {
+        guard !tracks.isEmpty else { return }
+        let pendingID = PendingPlaybackID.track(trackID ?? tracks.first?.id ?? "")
+        pendingPlaybackID = pendingID
+        Task {
+            await playTrackSelection(tracks, startingAt: trackID)
+            clearPendingPlayback(ifMatching: pendingID)
+        }
+    }
+
     func enqueueStationRecommendation(_ recommendation: PlexStationRecommendation, playNext: Bool) {
         guard let plexService = context.plexService,
               let server = context.libraryStore?.selectedPlexServer,
@@ -260,6 +270,41 @@ final class QueueManager: ObservableObject {
                 logDebug("Enqueued \(tracks.count) track(s) from station \(station.title)")
             } catch {
                 logDebug("Enqueue station failed: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    func enqueueTracks(_ tracks: [MediaTrack], playNext: Bool) {
+        guard !tracks.isEmpty else { return }
+        guard let currentTrack else {
+            playTracks(tracks, startingAt: tracks.first?.id)
+            return
+        }
+
+        Task {
+            do {
+                if context.mediaService.supportsServerManagedQueue, let playQueueID {
+                    let snapshot = try await context.mediaService.addTracksToQueue(
+                        tracks: tracks,
+                        playQueueID: playQueueID,
+                        playNext: playNext
+                    )
+                    applyServerSnapshot(snapshot, keepingTrackID: currentTrack.id)
+                    logDebug("Added \(tracks.count) track(s) to server play queue \(snapshot.id)")
+                    return
+                }
+
+                if playNext {
+                    let insertIndex = currentQueueIndex + 1
+                    orderedPlaybackQueue.insert(contentsOf: tracks, at: insertIndex)
+                } else {
+                    orderedPlaybackQueue.append(contentsOf: tracks)
+                }
+                applyPlaybackOrder(keepingTrackID: currentTrack.id)
+                logDebug("Enqueued \(tracks.count) track(s)")
+            } catch {
+                self.context.libraryStore?.libraryLoadError = LibraryLoadError(error)
+                logDebug("Enqueue tracks failed: \(error.localizedDescription)")
             }
         }
     }
@@ -596,6 +641,32 @@ final class QueueManager: ObservableObject {
         } catch {
             self.context.libraryStore?.libraryLoadError = LibraryLoadError(error)
             logDebug("Station playback failed: \(error.localizedDescription)")
+        }
+
+        self.context.libraryStore?.isLoadingLibrary = false
+    }
+
+    private func playTrackSelection(_ tracks: [MediaTrack], startingAt trackID: String?) async {
+        self.context.libraryStore?.isLoadingLibrary = true
+        self.context.libraryStore?.libraryLoadError = nil
+        logDebug("Starting playback from search results")
+
+        do {
+            let selectedTrackID = trackID ?? tracks.first?.id
+            if context.mediaService.supportsServerManagedQueue {
+                let snapshot = try await context.mediaService.createTrackListPlayQueue(tracks: tracks)
+                replacePlaybackQueue(with: snapshot)
+                applyPlaybackOrder(keepingTrackID: selectedTrackID ?? snapshot.selectedTrackID ?? snapshot.tracks.first?.id)
+                logDebug("Loaded server play queue \(snapshot.id) with \(snapshot.tracks.count) track(s)")
+            } else {
+                replacePlaybackQueue(with: tracks, keepingTrackID: selectedTrackID)
+                logDebug("Loaded \(tracks.count) track(s) for playback")
+            }
+            await playCurrentTrack()
+            logDebug("Now playing \(self.context.playbackEngine?.nowPlaying.trackName ?? "")")
+        } catch {
+            self.context.libraryStore?.libraryLoadError = LibraryLoadError(error)
+            logDebug("Track-list playback failed: \(error.localizedDescription)")
         }
 
         self.context.libraryStore?.isLoadingLibrary = false

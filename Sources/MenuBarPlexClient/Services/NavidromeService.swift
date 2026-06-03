@@ -77,6 +77,28 @@ final class NavidromeService: MediaService {
         return (detail.song ?? []).first?.mediaTrack(client: client)
     }
 
+    func searchLibrary(query: String, limit: Int) async throws -> MediaSearchResults {
+        let result = try await client.search(query: query, limit: limit)
+        var tracks = (result.song ?? []).map { $0.mediaTrack(client: client) }
+        var albums = (result.album ?? []).map { $0.mediaAlbum(client: client) }
+
+        for artist in result.artist ?? [] {
+            guard let detail = try? await client.getArtist(id: artist.id) else { continue }
+            let artistAlbums = detail.album ?? []
+            albums.append(contentsOf: artistAlbums.map { $0.mediaAlbum(client: client) })
+
+            for album in artistAlbums where tracks.count < limit {
+                guard let detail = try? await client.getAlbum(id: album.id) else { continue }
+                tracks.append(contentsOf: (detail.song ?? []).map { $0.mediaTrack(client: client) })
+            }
+        }
+
+        return MediaSearchResults(
+            tracks: deduplicate(tracks).prefix(limit).map { $0 },
+            albums: deduplicate(albums).prefix(limit).map { $0 }
+        )
+    }
+
     var supportsServerManagedQueue: Bool { false }
 
     func createPlaylistPlayQueue(playlistID: String, shuffle: Bool) async throws -> PlayQueueSnapshot {
@@ -125,6 +147,25 @@ final class NavidromeService: MediaService {
 
     func addStationToQueue(stationKey: String, playQueueID: Int, playNext: Bool) async throws -> PlayQueueSnapshot {
         throw NavidromeError.notSupported("Stations not supported by Navidrome")
+    }
+
+    func createTrackListPlayQueue(tracks: [MediaTrack]) async throws -> PlayQueueSnapshot {
+        guard !tracks.isEmpty else {
+            throw NavidromeError.notFound
+        }
+
+        return PlayQueueSnapshot(
+            id: 0,
+            totalCount: tracks.count,
+            selectedTrackID: tracks.first?.id,
+            version: nil,
+            isShuffled: false,
+            tracks: tracks
+        )
+    }
+
+    func addTracksToQueue(tracks: [MediaTrack], playQueueID: Int, playNext: Bool) async throws -> PlayQueueSnapshot {
+        throw NavidromeError.notSupported("Server-managed play queue not supported by Navidrome")
     }
 
     func removeQueueItem(playQueueID: Int, playQueueItemID: String, itemCount: Int) async throws -> PlayQueueSnapshot {

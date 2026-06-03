@@ -46,10 +46,12 @@ final class AppState {
     init() {
         authService = PlexAuthService()
 
+        let keychain = KeychainStore()
+
         if settingsStore.settings.mediaSource == .unspecified {
             if authService.authToken != nil {
                 settingsStore.settings.mediaSource = .plex
-            } else if settingsStore.settings.navidromeConfig.isFilled {
+            } else if Self.hasStoredNavidromePassword(config: settingsStore.settings.navidromeConfig, keychain: keychain) {
                 settingsStore.settings.mediaSource = .navidrome
             }
         }
@@ -66,21 +68,23 @@ final class AppState {
             }
         case .navidrome:
             let config = settingsStore.settings.navidromeConfig
-            if config.isFilled {
+            if Self.hasStoredNavidromePassword(config: config, keychain: keychain) {
                 settingsStore.switchProfile(
                     to: SettingsStore.navidromeProfileKey(connectionName: config.name),
                     seed: seedSettings
                 )
                 settingsStore.settings.mediaSource = .navidrome
                 settingsStore.settings.navidromeConfig = config
+            } else {
+                settingsStore.settings.mediaSource = .unspecified
             }
         case .unspecified:
             break
         }
 
-        if settingsStore.settings.mediaSource == .navidrome, settingsStore.settings.navidromeConfig.isFilled {
+        if settingsStore.settings.mediaSource == .navidrome,
+           Self.hasStoredNavidromePassword(config: settingsStore.settings.navidromeConfig, keychain: keychain) {
             let config = settingsStore.settings.navidromeConfig
-            let keychain = KeychainStore()
             let password = keychain.read(key: config.keychainKey) ?? ""
             mediaService = NavidromeService(config: config, password: password)
         } else {
@@ -119,7 +123,7 @@ final class AppState {
         guard settingsStore.settings.mediaSource == .unspecified else { return }
         if authService.authToken != nil {
             settingsStore.settings.mediaSource = .plex
-        } else if settingsStore.settings.navidromeConfig.isFilled {
+        } else if hasStoredNavidromePassword() {
             settingsStore.settings.mediaSource = .navidrome
         }
     }
@@ -147,7 +151,8 @@ final class AppState {
         switch activeMediaSource {
         case .unspecified: return false
         case .plex: return authService.authToken != nil
-        case .navidrome: return settingsStore.settings.navidromeConfig.isFilled
+        case .navidrome:
+            return settingsStore.settings.navidromeConfig.isFilled && hasStoredNavidromePassword()
         }
     }
 
@@ -273,8 +278,10 @@ final class AppState {
 
     func signOut() {
         let keychain = KeychainStore()
-        if settingsStore.settings.navidromeConfig.isFilled {
-            keychain.delete(key: settingsStore.settings.navidromeConfig.keychainKey)
+        let wasNavidrome = activeMediaSource == .navidrome
+        let navidromeConfig = settingsStore.settings.navidromeConfig
+        if wasNavidrome, navidromeConfig.isFilled {
+            keychain.delete(key: navidromeConfig.keychainKey)
         }
 
         timelineTracker.stopTracking()
@@ -283,10 +290,11 @@ final class AppState {
         queueManager.resetQueue()
         libraryStore.resetPlaybackPreview()
         authService.signOut()
+        switchMediaService(to: PlexService(authService: authService))
         settingsStore.settings.selectedServerID = nil
         settingsStore.settings.selectedLibraryID = nil
         settingsStore.settings.mediaSource = .unspecified
-        settingsStore.settings.navidromeConfig = .default
+        settingsStore.settings.navidromeConfig = wasNavidrome ? navidromeConfig : .default
         libraryStore.availableServers = []
         libraryStore.availableLibraries = []
         libraryStore.recentlyPlayedAlbums = []
@@ -302,6 +310,18 @@ final class AppState {
     private func switchMediaService(to service: MediaService) {
         mediaService = service
         context.mediaService = service
+    }
+
+    private func hasStoredNavidromePassword(keychain: KeychainStore = KeychainStore()) -> Bool {
+        Self.hasStoredNavidromePassword(config: settingsStore.settings.navidromeConfig, keychain: keychain)
+    }
+
+    private static func hasStoredNavidromePassword(config: NavidromeServerConfig, keychain: KeychainStore) -> Bool {
+        guard config.isFilled,
+              let password = keychain.read(key: config.keychainKey) else {
+            return false
+        }
+        return !password.isEmpty
     }
 
     private func activatePlexSettingsProfile(seed: AppSettings? = nil) {
@@ -391,6 +411,10 @@ final class AppState {
         settingsStore.settings.themePreference = preference
     }
 
+    func searchLibrary(query: String, limit: Int = 20) async throws -> MediaSearchResults {
+        try await mediaService.searchLibrary(query: query, limit: limit)
+    }
+
     // MARK: - Playables
 
     func playAlbum(_ album: MediaAlbum) {
@@ -405,6 +429,10 @@ final class AppState {
         queueManager.playStation(station)
     }
 
+    func playTracks(_ tracks: [MediaTrack], startingAt trackID: String?) {
+        queueManager.playTracks(tracks, startingAt: trackID)
+    }
+
     func enqueueAlbum(_ album: MediaAlbum, playNext: Bool) {
         queueManager.enqueueAlbum(album, playNext: playNext)
     }
@@ -415,6 +443,10 @@ final class AppState {
 
     func enqueueStation(_ station: MediaStation, playNext: Bool) {
         queueManager.enqueueStation(station, playNext: playNext)
+    }
+
+    func enqueueTracks(_ tracks: [MediaTrack], playNext: Bool) {
+        queueManager.enqueueTracks(tracks, playNext: playNext)
     }
 
     func playStationRecommendation(_ recommendation: PlexStationRecommendation) {

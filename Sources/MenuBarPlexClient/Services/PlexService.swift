@@ -145,6 +145,15 @@ final class PlexService: MediaService {
         return track?.mediaTrack
     }
 
+    func searchLibrary(query: String, limit: Int) async throws -> MediaSearchResults {
+        guard let server = _selectedServer, let library = _selectedLibrary, let token = authService.authToken else {
+            throw PlexAPIError.serverSelectionRequired
+        }
+        return try await content.searchLibrary(
+            server: server, library: library, userToken: token, query: query, limit: limit
+        )
+    }
+
     // MARK: - Play queue
 
     var supportsServerManagedQueue: Bool { true }
@@ -245,6 +254,27 @@ final class PlexService: MediaService {
         let station = PlexStation(id: stationKey, title: "", key: stationKey)
         let snapshot = try await queue.addStationToPlayQueue(
             server: server, station: station,
+            playQueueID: playQueueID, playNext: playNext, userToken: token
+        )
+        return snapshot.mediaPlayQueueSnapshot
+    }
+
+    func createTrackListPlayQueue(tracks: [MediaTrack]) async throws -> PlayQueueSnapshot {
+        guard let server = _selectedServer, let library = _selectedLibrary, let token = authService.authToken else {
+            throw PlexAPIError.serverSelectionRequired
+        }
+        let snapshot = try await queue.createTrackListPlayQueue(
+            server: server, library: library, tracks: tracks.map(\.plexTrack), userToken: token
+        )
+        return snapshot.mediaPlayQueueSnapshot
+    }
+
+    func addTracksToQueue(tracks: [MediaTrack], playQueueID: Int, playNext: Bool) async throws -> PlayQueueSnapshot {
+        guard let server = _selectedServer, let library = _selectedLibrary, let token = authService.authToken else {
+            throw PlexAPIError.serverSelectionRequired
+        }
+        let snapshot = try await queue.addTracksToPlayQueue(
+            server: server, library: library, tracks: tracks.map(\.plexTrack),
             playQueueID: playQueueID, playNext: playNext, userToken: token
         )
         return snapshot.mediaPlayQueueSnapshot

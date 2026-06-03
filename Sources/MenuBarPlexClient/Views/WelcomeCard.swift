@@ -2,6 +2,7 @@ import SwiftUI
 
 struct WelcomeCard: View {
     @Binding var mediaSource: ActiveMediaSource
+    let navidromeConfig: NavidromeServerConfig
     let authState: PlexAuthStatus.State
     let onBeginPlexLogin: () -> Void
     let onOpenBrowser: () -> Void
@@ -15,6 +16,7 @@ struct WelcomeCard: View {
         VStack(alignment: .leading, spacing: 12) {
             if showNavidromeForm {
                 NavidromeLoginCard(
+                    initialConfig: navidromeConfig,
                     onConnect: { config, password in
                         onConfigureNavidrome(config, password)
                     },

@@ -71,6 +71,23 @@ struct SubsonicAlbumDetail: Decodable {
     }
 }
 
+// MARK: - Artist Detail
+
+struct SubsonicArtist: Decodable {
+    let id: String
+    let name: String
+    let coverArt: String?
+    let albumCount: Int?
+}
+
+struct SubsonicArtistDetail: Decodable {
+    let id: String
+    let name: String
+    let coverArt: String?
+    let album: [SubsonicAlbum]?
+    let albumCount: Int?
+}
+
 // MARK: - Track (Song)
 
 struct SubsonicTrack: Decodable {
@@ -154,6 +171,14 @@ struct SubsonicSongsByGenre: Decodable {
     let song: [SubsonicTrack]?
 }
 
+// MARK: - Search
+
+struct SubsonicSearchResult: Decodable {
+    let artist: [SubsonicArtist]?
+    let album: [SubsonicAlbum]?
+    let song: [SubsonicTrack]?
+}
+
 // MARK: - Playlist
 
 struct SubsonicPlaylists: Decodable {
@@ -187,6 +212,10 @@ struct SubsonicAlbumContainer: Decodable {
     let album: SubsonicAlbumDetail
 }
 
+struct SubsonicArtistContainer: Decodable {
+    let artist: SubsonicArtistDetail
+}
+
 struct SubsonicPlaylistsContainer: Decodable {
     let playlists: SubsonicPlaylists
 }
@@ -197,4 +226,12 @@ struct SubsonicGenresContainer: Decodable {
 
 struct SubsonicSongsByGenreContainer: Decodable {
     let songsByGenre: SubsonicSongsByGenre
+}
+
+struct SubsonicSearchResultContainer: Decodable {
+    let searchResult: SubsonicSearchResult
+
+    enum CodingKeys: String, CodingKey {
+        case searchResult = "searchResult3"
+    }
 }

@@ -103,6 +103,13 @@ struct SubsonicClient {
         return container.album
     }
 
+    func getArtist(id: String) async throws -> SubsonicArtistDetail {
+        let container: SubsonicArtistContainer = try await request(path: "/rest/getArtist", extraParams: [
+            ("id", id),
+        ])
+        return container.artist
+    }
+
     func getPlaylists() async throws -> [SubsonicPlaylist] {
         let container: SubsonicPlaylistsContainer = try await request(path: "/rest/getPlaylists")
         return container.playlists.playlist ?? []
@@ -143,6 +150,19 @@ struct SubsonicClient {
             ("offset", String(offset)),
         ])
         return container.songsByGenre.song ?? []
+    }
+
+    func search(query: String, limit: Int = 20) async throws -> SubsonicSearchResult {
+        let container: SubsonicSearchResultContainer = try await request(path: "/rest/search3", extraParams: [
+            ("query", query),
+            ("artistCount", String(limit)),
+            ("artistOffset", "0"),
+            ("albumCount", String(limit)),
+            ("albumOffset", "0"),
+            ("songCount", String(limit)),
+            ("songOffset", "0"),
+        ])
+        return container.searchResult
     }
 
     func streamURL(id: String) -> URL {

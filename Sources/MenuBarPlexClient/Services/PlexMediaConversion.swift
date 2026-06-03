@@ -39,6 +39,27 @@ extension PlexTrack {
     }
 }
 
+extension MediaTrack {
+    var plexTrack: PlexTrack {
+        PlexTrack(
+            id: id,
+            playQueueItemID: playQueueItemID,
+            ratingKey: ratingKey ?? id,
+            albumRatingKey: albumRatingKey,
+            artistRatingKey: artistRatingKey,
+            durationMilliseconds: durationMilliseconds,
+            title: title,
+            trackArtist: trackArtist,
+            albumArtist: albumArtist,
+            albumName: albumName,
+            artworkURL: artworkURL,
+            trackNumber: trackNumber,
+            discNumber: discNumber,
+            streamURL: streamURL
+        )
+    }
+}
+
 extension PlexPlaylist {
     var mediaPlaylist: MediaPlaylist {
         MediaPlaylist(id: id, title: title, trackCount: trackCount)

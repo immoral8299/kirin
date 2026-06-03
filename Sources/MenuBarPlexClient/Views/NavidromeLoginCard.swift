@@ -1,17 +1,34 @@
 import SwiftUI
 
 struct NavidromeLoginCard: View {
+    let initialConfig: NavidromeServerConfig
     let onConnect: (NavidromeServerConfig, String) -> Void
     let onVerify: (NavidromeServerConfig, String) async throws -> Void
     let onBack: () -> Void
 
-    @State private var serverName: String = ""
-    @State private var serverURL: String = ""
-    @State private var username: String = ""
+    @State private var serverName: String
+    @State private var serverURL: String
+    @State private var username: String
     @State private var password: String = ""
-    @State private var publicURL: String = ""
+    @State private var publicURL: String
     @State private var isConnecting: Bool = false
     @State private var errorMessage: String?
+
+    init(
+        initialConfig: NavidromeServerConfig = .default,
+        onConnect: @escaping (NavidromeServerConfig, String) -> Void,
+        onVerify: @escaping (NavidromeServerConfig, String) async throws -> Void,
+        onBack: @escaping () -> Void
+    ) {
+        self.initialConfig = initialConfig
+        self.onConnect = onConnect
+        self.onVerify = onVerify
+        self.onBack = onBack
+        _serverName = State(initialValue: initialConfig.name == NavidromeServerConfig.default.name ? "" : initialConfig.name)
+        _serverURL = State(initialValue: initialConfig.url)
+        _username = State(initialValue: initialConfig.username)
+        _publicURL = State(initialValue: initialConfig.publicUrl ?? "")
+    }
 
     private var isValid: Bool {
         !serverName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&

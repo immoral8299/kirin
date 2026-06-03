@@ -17,6 +17,7 @@ enum MenuBarLayout {
 private enum ContentTab {
     case home
     case queue
+    case search
     case settings
 }
 
@@ -76,6 +77,7 @@ struct MenuBarRootView: View {
         } else {
             WelcomeCard(
                 mediaSource: $settingsStore.settings.mediaSource,
+                navidromeConfig: settingsStore.settings.navidromeConfig,
                 authState: authService.status.state,
                 onBeginPlexLogin: appState.beginPlexLogin,
                 onOpenBrowser: authService.reopenBrowser,
@@ -109,6 +111,7 @@ struct MenuBarRootView: View {
             if appState.isConfigured {
                 tabButton(.home, icon: "house", tooltip: "Home")
                 tabButton(.queue, icon: "list.bullet", tooltip: "Play Queue")
+                tabButton(.search, icon: "magnifyingglass", tooltip: "Search")
                 tabButton(.settings, icon: "gearshape", tooltip: "Settings")
             }
         }
@@ -121,6 +124,8 @@ struct MenuBarRootView: View {
             return "Kirin"
         case .queue:
             return "Kirin / Queue"
+        case .search:
+            return "Kirin / Search"
         case .settings:
             return "Kirin / Settings"
         }
@@ -198,6 +203,8 @@ private struct AuthenticatedContent: View {
                 .background(AppTheme.panelFillSoft, in: RoundedRectangle(cornerRadius: AppCornerRadius.medium, style: .continuous))
             case .queue:
                 QueueContent(appState: appState)
+            case .search:
+                SearchView(appState: appState)
             case .home:
                 HomeContent(appState: appState)
             }

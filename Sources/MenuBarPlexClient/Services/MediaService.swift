@@ -26,6 +26,7 @@ protocol MediaService: AnyObject {
     func fetchRelatedAlbums(albumRatingKey: String, limit: Int) async throws -> [MediaAlbum]
     func fetchPlaylistTracks(playlistID: String) async throws -> [MediaTrack]
     func fetchLastPlayedTrack() async throws -> MediaTrack?
+    func searchLibrary(query: String, limit: Int) async throws -> MediaSearchResults
 
     // Play queue
     var supportsServerManagedQueue: Bool { get }
@@ -38,6 +39,8 @@ protocol MediaService: AnyObject {
     func addAlbumToQueue(albumID: String, playQueueID: Int, playNext: Bool) async throws -> PlayQueueSnapshot
     func addPlaylistToQueue(playlistID: String, playQueueID: Int, playNext: Bool) async throws -> PlayQueueSnapshot
     func addStationToQueue(stationKey: String, playQueueID: Int, playNext: Bool) async throws -> PlayQueueSnapshot
+    func createTrackListPlayQueue(tracks: [MediaTrack]) async throws -> PlayQueueSnapshot
+    func addTracksToQueue(tracks: [MediaTrack], playQueueID: Int, playNext: Bool) async throws -> PlayQueueSnapshot
     func removeQueueItem(playQueueID: Int, playQueueItemID: String, itemCount: Int) async throws -> PlayQueueSnapshot
     func clearQueue(playQueueID: Int) async throws
     func moveQueueItem(playQueueID: Int, playQueueItemID: String, afterPlayQueueItemID: String?, itemCount: Int) async throws -> PlayQueueSnapshot
