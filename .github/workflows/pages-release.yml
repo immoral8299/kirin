@@ -31,6 +31,14 @@ jobs:
       - name: Install release dependencies
         run: brew install vips
 
+      - name: Cache Swift build products
+        uses: actions/cache@v4
+        with:
+          path: .build
+          key: swift-build-${{ runner.arch }}-${{ hashFiles('Package.swift', 'Package.resolved', 'Sources/**/*.swift', 'Tests/**/*.swift') }}
+          restore-keys: |
+            swift-build-${{ runner.arch }}-
+
       - name: Resolve version
         id: version
         shell: bash
@@ -50,6 +58,8 @@ jobs:
 
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
+        with:
+          enablement: true
 
       - name: Prepare GitHub Pages site
         shell: bash
