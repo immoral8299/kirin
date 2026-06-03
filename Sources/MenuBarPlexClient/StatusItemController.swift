@@ -94,8 +94,8 @@ final class StatusItemController: NSObject {
         panelContainerView.layer?.masksToBounds = true
 
         panelContentView.translatesAutoresizingMaskIntoConstraints = false
-        if #available(macOS 26.0, *), let glassView = panelContainerView as? NSGlassEffectView {
-            glassView.contentView = panelContentView
+        if #available(macOS 26.0, *), let glassClass = NSClassFromString("NSGlassEffectView"), panelContainerView.isKind(of: glassClass) {
+            panelContainerView.setValue(panelContentView, forKey: "contentView")
         } else {
             panelContainerView.addSubview(panelContentView)
             NSLayoutConstraint.activate([
@@ -119,10 +119,10 @@ final class StatusItemController: NSObject {
     }
 
     private static func makePanelContainerView() -> NSView {
-        if #available(macOS 26.0, *) {
-            let glassView = NSGlassEffectView(frame: .zero)
-            glassView.cornerRadius = AppCornerRadius.panel
-            glassView.style = .regular
+        if #available(macOS 26.0, *), let glassClass = NSClassFromString("NSGlassEffectView") as? NSView.Type {
+            let glassView = glassClass.init(frame: .zero)
+            glassView.setValue(AppCornerRadius.panel, forKey: "cornerRadius")
+            glassView.setValue(0, forKey: "style")
             return glassView
         }
 
