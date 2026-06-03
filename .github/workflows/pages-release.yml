@@ -2,8 +2,6 @@ name: Build DMG and Publish Pages
 
 on:
   push:
-    branches:
-      - main
     tags:
       - "v*"
   workflow_dispatch:
@@ -130,8 +128,8 @@ jobs:
             <main>
               <h1>Kirin</h1>
               <p>Download the latest macOS DMG build.</p>
-              <a class="button" href="./downloads/Kirin.dmg">Download Kirin.dmg</a>
-              <p class="meta">Published from GitHub Actions.</p>
+              <a class="button" href="./downloads/Kirin.dmg">Download Kirin</a>
+              <p class="meta">To bypass gatekeeper, run <code>sudo xattr -r -d com.apple.quarantine /Applications/Kirin.app</code>.</p>
             </main>
           </body>
           </html>
