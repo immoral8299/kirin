@@ -19,20 +19,56 @@ concurrency:
 
 jobs:
   build:
-    runs-on: macos-latest
+    runs-on: macos-26
+    env:
+      SWIFT_VERSION: "6.3"
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      - name: Restore Swift toolchain
+        id: swift-toolchain-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: /Library/Developer/Toolchains/swift-${{ env.SWIFT_VERSION }}*.xctoolchain
+          key: swift-toolchain-${{ runner.os }}-${{ runner.arch }}-${{ env.SWIFT_VERSION }}
+
       - uses: swift-actions/setup-swift@v3
         with:
-          swift-version: "6.3"
+          swift-version: ${{ env.SWIFT_VERSION }}
+
+      - name: Save Swift toolchain
+        if: steps.swift-toolchain-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: /Library/Developer/Toolchains/swift-${{ env.SWIFT_VERSION }}*.xctoolchain
+          key: ${{ steps.swift-toolchain-cache.outputs.cache-primary-key }}
+
+      - name: Resolve Homebrew cache path
+        id: homebrew-cache
+        shell: bash
+        run: echo "path=$(brew --cache)" >> "${GITHUB_OUTPUT}"
+
+      - name: Restore Homebrew vips bottles
+        id: homebrew-vips-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ steps.homebrew-cache.outputs.path }}
+          key: homebrew-vips-${{ runner.os }}-${{ runner.arch }}-v1
 
       - name: Install release dependencies
         run: brew install vips
 
-      - name: Cache Swift build products
-        uses: actions/cache@v4
+      - name: Save Homebrew vips bottles
+        if: steps.homebrew-vips-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ steps.homebrew-cache.outputs.path }}
+          key: ${{ steps.homebrew-vips-cache.outputs.cache-primary-key }}
+
+      - name: Restore Swift build products
+        id: swift-build-cache
+        uses: actions/cache/restore@v4
         with:
           path: .build
           key: swift-build-${{ runner.arch }}-${{ hashFiles('Package.swift', 'Package.resolved', 'Sources/**/*.swift', 'Tests/**/*.swift') }}
@@ -55,6 +91,13 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
           BUILD_NUMBER: ${{ github.run_number }}
         run: scripts/release-dmg.sh
+
+      - name: Save Swift build products
+        if: steps.swift-build-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .build
+          key: ${{ steps.swift-build-cache.outputs.cache-primary-key }}
 
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
