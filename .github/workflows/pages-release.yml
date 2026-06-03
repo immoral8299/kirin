@@ -24,6 +24,10 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      - uses: swift-actions/setup-swift@v3
+        with:
+          swift-version: "6.3"
+
       - name: Install release dependencies
         run: brew install vips
 
