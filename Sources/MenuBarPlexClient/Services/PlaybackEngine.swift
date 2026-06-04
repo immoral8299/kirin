@@ -26,11 +26,15 @@ final class PlaybackEngine: ObservableObject {
     private var playerItemStatusObserver: AnyCancellable?
     private var playerTimeControlStatusObserver: AnyCancellable?
     private var playbackPreparationID: Int = 0
+    private var prebufferPreparationID: Int = 0
     private var seekID: Int = 0
     private var isPlaybackRequested = false
     private var loudnessGainCache: [String: Float] = [:]
     private var missingLoudnessAnalysisTrackIDs = Set<String>()
     private var _currentTrack: MediaTrack?
+    private var prebufferedTrackID: String?
+    private var prebufferedItem: AVPlayerItem?
+    private var prebufferTask: Task<Void, Never>?
     private let fallbackLoudnessGain: Float = -6
 
     init(context: StoreContext) {
@@ -136,11 +140,45 @@ final class PlaybackEngine: ObservableObject {
         playerItemEndObserver = nil
         playerItemStatusObserver = nil
         player = nil
+        clearPrebufferedTrack()
     }
 
     func clearCaches() {
         loudnessGainCache.removeAll()
         missingLoudnessAnalysisTrackIDs.removeAll()
+    }
+
+    func prebufferNextTrack(_ track: MediaTrack?) {
+        let preparationID = nextPrebufferPreparationID()
+        prebufferTask?.cancel()
+
+        guard let track, track.id != _currentTrack?.id else {
+            prebufferedTrackID = nil
+            prebufferedItem = nil
+            return
+        }
+
+        if prebufferedTrackID == track.id, prebufferedItem != nil {
+            return
+        }
+
+        prebufferedTrackID = nil
+        prebufferedItem = nil
+        prebufferTask = Task {
+            let asset = AVURLAsset(url: track.streamURL)
+            do {
+                _ = try await asset.load(.isPlayable)
+                guard !Task.isCancelled, preparationID == self.prebufferPreparationID else { return }
+                self.prebufferedTrackID = track.id
+                self.prebufferedItem = AVPlayerItem(asset: asset)
+                self.logDebug("Prebuffered next track \(track.title)")
+            } catch {
+                guard !Task.isCancelled, preparationID == self.prebufferPreparationID else { return }
+                self.prebufferedTrackID = nil
+                self.prebufferedItem = nil
+                self.logDebug("Prebuffer next track failed for \(track.title): \(error.localizedDescription)")
+            }
+        }
     }
 
     // MARK: - Private
@@ -167,7 +205,7 @@ final class PlaybackEngine: ObservableObject {
         invalidatePendingSeek()
         context.timelineTracker?.beginTracking(track)
         context.libraryStore?.refreshRelatedAlbums(for: track)
-        let item = AVPlayerItem(url: track.streamURL)
+        let item = preparedPlayerItem(for: track)
         observePlaybackEnd(for: item)
         observePlayerItemStatus(for: item)
 
@@ -241,46 +279,11 @@ final class PlaybackEngine: ObservableObject {
             return false
         }
 
-        if let plexService = context.mediaService as? PlexService {
-            guard context.libraryStore?.selectedPlexServer != nil,
-                  context.libraryStore?.selectedPlexLibrary != nil,
-                  plexService.authService.authToken != nil else {
-                logDebug("Skipping Plex loudness leveling for \(track.title): missing active Plex library")
-                return false
-            }
-            return true
-        }
-
-        if context.mediaService is NavidromeService {
-            return true
-        }
-
-        logDebug("Skipping loudness leveling for \(track.title): unsupported media service")
-        return false
+        return track.ratingKey != nil || !track.id.isEmpty
     }
 
     private func fetchLoudnessGain(for loudnessID: String, track: MediaTrack) async throws -> Float? {
-        if context.mediaService is LocalService {
-            return nil
-        }
-
-        if let plexService = context.mediaService as? PlexService {
-            guard let server = context.libraryStore?.selectedPlexServer,
-                  context.libraryStore?.selectedPlexLibrary != nil,
-                  let userToken = plexService.authService.authToken else {
-                logDebug("Skipping Plex loudness leveling for \(track.title): missing active Plex library")
-                return nil
-            }
-
-            return try await plexService.fetchLoudnessGain(server: server, ratingKey: loudnessID, userToken: userToken)
-        }
-
-        if context.mediaService is NavidromeService {
-            return try await context.mediaService.fetchLoudnessGain(ratingKey: loudnessID)
-        }
-
-        logDebug("Skipping loudness leveling for \(track.title): unsupported media service")
-        return nil
+        try await context.mediaService.fetchLoudnessGain(ratingKey: loudnessID)
     }
 
     private func loudnessCacheKey(for loudnessID: String) -> String {
@@ -314,6 +317,18 @@ final class PlaybackEngine: ObservableObject {
                     self?.handlePlaybackEnded()
                 }
             }
+    }
+
+    private func preparedPlayerItem(for track: MediaTrack) -> AVPlayerItem {
+        guard prebufferedTrackID == track.id,
+              let prebufferedItem else {
+            return AVPlayerItem(url: track.streamURL)
+        }
+
+        self.prebufferedTrackID = nil
+        self.prebufferedItem = nil
+        logDebug("Using prebuffered item for \(track.title)")
+        return prebufferedItem
     }
 
     private func observePlayerItemStatus(for item: AVPlayerItem) {
@@ -425,9 +440,22 @@ final class PlaybackEngine: ObservableObject {
         return playbackPreparationID
     }
 
+    private func nextPrebufferPreparationID() -> Int {
+        prebufferPreparationID += 1
+        return prebufferPreparationID
+    }
+
     private func nextSeekID() -> Int {
         seekID += 1
         return seekID
+    }
+
+    private func clearPrebufferedTrack() {
+        prebufferTask?.cancel()
+        prebufferTask = nil
+        prebufferedTrackID = nil
+        prebufferedItem = nil
+        _ = nextPrebufferPreparationID()
     }
 
     private func logDebug(_ message: String) {

@@ -1,10 +1,10 @@
 import SwiftUI
 
 struct QueueStationRecommendationsSection: View {
-    let recommendations: [PlexStationRecommendation]
+    let recommendations: [MediaStationRecommendation]
     let pendingPlaybackID: String?
-    let onSelect: (PlexStationRecommendation) -> Void
-    let onAddToQueue: (PlexStationRecommendation) -> Void
+    let onSelect: (MediaStationRecommendation) -> Void
+    let onAddToQueue: (MediaStationRecommendation) -> Void
 
     var body: some View {
         if !recommendations.isEmpty {
@@ -23,7 +23,7 @@ struct QueueStationRecommendationsSection: View {
         }
     }
 
-    private func stationCard(_ recommendation: PlexStationRecommendation) -> some View {
+    private func stationCard(_ recommendation: MediaStationRecommendation) -> some View {
         HStack(spacing: 8) {
             Button {
                 onSelect(recommendation)

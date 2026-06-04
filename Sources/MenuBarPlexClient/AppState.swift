@@ -495,11 +495,11 @@ final class AppState {
         queueManager.enqueueTracks(tracks, playNext: playNext)
     }
 
-    func playStationRecommendation(_ recommendation: PlexStationRecommendation) {
+    func playStationRecommendation(_ recommendation: MediaStationRecommendation) {
         queueManager.playStationRecommendation(recommendation)
     }
 
-    func enqueueStationRecommendation(_ recommendation: PlexStationRecommendation, playNext: Bool) {
+    func enqueueStationRecommendation(_ recommendation: MediaStationRecommendation, playNext: Bool) {
         queueManager.enqueueStationRecommendation(recommendation, playNext: playNext)
     }
 

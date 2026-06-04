@@ -61,18 +61,18 @@ struct PlexStation: Identifiable, Hashable {
     let key: String
 }
 
-enum PlexStationRecommendationKind: Hashable {
+enum MediaStationRecommendationKind: Hashable {
     case artist
     case album
 }
 
-struct PlexStationRecommendation: Identifiable, Hashable {
-    let kind: PlexStationRecommendationKind
+struct MediaStationRecommendation: Identifiable, Hashable {
+    let kind: MediaStationRecommendationKind
     let seedID: String
     let title: String
     let subtitle: String
     let artworkURL: URL?
-    let station: PlexStation?
+    let station: MediaStation?
 
     var id: String {
         "\(kind)-\(seedID)"

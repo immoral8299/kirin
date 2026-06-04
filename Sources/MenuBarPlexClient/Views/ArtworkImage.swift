@@ -69,19 +69,19 @@ private final class ArtworkThumbnailCache {
     static let shared = ArtworkThumbnailCache()
 
     private let cache = NSCache<NSURL, NSImage>()
-    private let fileManager = FileManager.default
-    private let diskCacheDirectory: URL
+    private let thumbnailStore: ArtworkThumbnailStore
     private let thumbnailMaxPixelSize = 256
 
     private init() {
-        diskCacheDirectory = FileManager.default.temporaryDirectory
+        let diskCacheDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("KirinArtworkThumbnails", isDirectory: true)
+        thumbnailStore = ArtworkThumbnailStore(
+            diskCacheDirectory: diskCacheDirectory,
+            thumbnailMaxPixelSize: thumbnailMaxPixelSize
+        )
 
         cache.countLimit = 256
         cache.totalCostLimit = 24 * 1_024 * 1_024
-
-        try? fileManager.removeItem(at: diskCacheDirectory)
-        try? fileManager.createDirectory(at: diskCacheDirectory, withIntermediateDirectories: true)
     }
 
     func image(for url: URL) -> NSImage? {
@@ -93,67 +93,100 @@ private final class ArtworkThumbnailCache {
             return cachedImage
         }
 
-        if let diskCachedImage = loadDiskCachedThumbnail(for: url) {
-            storeInMemory(diskCachedImage, for: url)
-            return diskCachedImage
-        }
-
-        do {
-            let data: Data
-            if url.isFileURL {
-                data = try Data(contentsOf: url)
-            } else {
-                let (downloadedData, response) = try await URLSession.shared.data(from: url)
-                guard let httpResponse = response as? HTTPURLResponse,
-                      (200 ... 299).contains(httpResponse.statusCode) else {
-                    return nil
-                }
-                data = downloadedData
-            }
-
-            guard let thumbnail = makeThumbnail(from: data) else { return nil }
-
-            storeInMemory(thumbnail, for: url)
-            storeOnDisk(thumbnail, for: url)
-            return thumbnail
-        } catch {
+        guard let thumbnailData = await thumbnailStore.thumbnailData(for: url),
+              let thumbnail = NSImage(data: thumbnailData) else {
             return nil
         }
+
+        storeInMemory(thumbnail, for: url)
+        return thumbnail
     }
 
     private func storeInMemory(_ image: NSImage, for url: URL) {
         let pixelSize = image.representations.first?.pixelsWide ?? thumbnailMaxPixelSize
         cache.setObject(image, forKey: url as NSURL, cost: pixelSize * pixelSize * 4)
     }
+}
 
-    private func loadDiskCachedThumbnail(for url: URL) -> NSImage? {
-        let fileURL = diskCacheFileURL(for: url)
-        guard let data = try? Data(contentsOf: fileURL) else { return nil }
-        return makeThumbnail(from: data)
+private actor ArtworkThumbnailStore {
+    private let fileManager = FileManager.default
+    private let diskCacheDirectory: URL
+    private let thumbnailMaxPixelSize: Int
+    private var inFlightRequests: [URL: Task<Data?, Never>] = [:]
+
+    init(diskCacheDirectory: URL, thumbnailMaxPixelSize: Int) {
+        self.diskCacheDirectory = diskCacheDirectory
+        self.thumbnailMaxPixelSize = thumbnailMaxPixelSize
+
+        try? fileManager.removeItem(at: diskCacheDirectory)
+        try? fileManager.createDirectory(at: diskCacheDirectory, withIntermediateDirectories: true)
     }
 
-    private func storeOnDisk(_ image: NSImage, for url: URL) {
-        guard let representation = image.representations.first as? NSBitmapImageRep,
-              let data = representation.representation(using: .png, properties: [:]) else {
-            return
+    func thumbnailData(for url: URL) async -> Data? {
+        if let inFlightRequest = inFlightRequests[url] {
+            return await inFlightRequest.value
         }
 
-        try? data.write(to: diskCacheFileURL(for: url), options: .atomic)
+        let request = Task { [diskCacheDirectory, thumbnailMaxPixelSize] in
+            await Self.loadThumbnailData(
+                for: url,
+                diskCacheDirectory: diskCacheDirectory,
+                thumbnailMaxPixelSize: thumbnailMaxPixelSize
+            )
+        }
+        inFlightRequests[url] = request
+        let data = await request.value
+        inFlightRequests[url] = nil
+        return data
     }
 
-    private func diskCacheFileURL(for url: URL) -> URL {
+    private static func loadThumbnailData(
+        for url: URL,
+        diskCacheDirectory: URL,
+        thumbnailMaxPixelSize: Int
+    ) async -> Data? {
+        let fileURL = diskCacheFileURL(for: url, diskCacheDirectory: diskCacheDirectory)
+        if let cachedData = try? Data(contentsOf: fileURL) {
+            return cachedData
+        }
+
+        do {
+            let originalData: Data
+            if url.isFileURL {
+                originalData = try Data(contentsOf: url)
+            } else {
+                let (downloadedData, response) = try await URLSession.shared.data(from: url)
+                guard let httpResponse = response as? HTTPURLResponse,
+                      (200 ... 299).contains(httpResponse.statusCode) else {
+                    return nil
+                }
+                originalData = downloadedData
+            }
+
+            guard let thumbnailData = makeThumbnailData(from: originalData, maxPixelSize: thumbnailMaxPixelSize) else {
+                return nil
+            }
+
+            try? thumbnailData.write(to: fileURL, options: .atomic)
+            return thumbnailData
+        } catch {
+            return nil
+        }
+    }
+
+    private static func diskCacheFileURL(for url: URL, diskCacheDirectory: URL) -> URL {
         let digest = SHA256.hash(data: Data(url.absoluteString.utf8))
         let filename = digest.map { String(format: "%02x", $0) }.joined()
         return diskCacheDirectory.appendingPathComponent(filename).appendingPathExtension("png")
     }
 
-    private func makeThumbnail(from data: Data) -> NSImage? {
+    private static func makeThumbnailData(from data: Data, maxPixelSize: Int) -> Data? {
         guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
 
         let options: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceCreateThumbnailWithTransform: true,
-            kCGImageSourceThumbnailMaxPixelSize: thumbnailMaxPixelSize,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixelSize,
         ]
 
         guard let thumbnail = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
@@ -161,8 +194,6 @@ private final class ArtworkThumbnailCache {
         }
 
         let representation = NSBitmapImageRep(cgImage: thumbnail)
-        let image = NSImage(size: representation.size)
-        image.addRepresentation(representation)
-        return image
+        return representation.representation(using: .png, properties: [:])
     }
 }

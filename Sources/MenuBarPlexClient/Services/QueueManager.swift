@@ -26,6 +26,12 @@ final class QueueManager: ObservableObject {
         return playbackQueue[currentQueueIndex]
     }
 
+    var nextTrack: MediaTrack? {
+        let nextIndex = currentQueueIndex + 1
+        guard playbackQueue.indices.contains(nextIndex) else { return nil }
+        return playbackQueue[nextIndex]
+    }
+
     var hasEditablePlayQueue: Bool { !playbackQueue.isEmpty }
 
     var canGoToPreviousTrack: Bool {
@@ -91,7 +97,7 @@ final class QueueManager: ObservableObject {
         }
     }
 
-    func enqueueStationRecommendation(_ recommendation: PlexStationRecommendation, playNext: Bool) {
+    func enqueueStationRecommendation(_ recommendation: MediaStationRecommendation, playNext: Bool) {
         guard let plexService = context.plexService,
               let server = context.libraryStore?.selectedPlexServer,
               let userToken = plexService.authService.authToken,
@@ -102,7 +108,7 @@ final class QueueManager: ObservableObject {
 
         switch recommendation.kind {
         case .artist:
-            guard let station = recommendation.station?.mediaStation else { return }
+            guard let station = recommendation.station else { return }
             Task {
                 do {
                     if context.mediaService.supportsServerManagedQueue, let playQueueID {
@@ -114,11 +120,8 @@ final class QueueManager: ObservableObject {
                         applyServerSnapshot(snapshot, keepingTrackID: currentTrack.id)
                         logDebug("Added station recommendation to server play queue \(snapshot.id)")
                     } else {
-                        let plexStation = PlexStation(id: station.id, title: station.title, key: station.key)
-                        let snapshot = try await plexService.createStationPlayQueue(
-                            server: server, station: plexStation, userToken: userToken
-                        )
-                        let tracks = snapshot.tracks.map(\.mediaTrack)
+                        let snapshot = try await context.mediaService.createStationPlayQueue(stationKey: station.key)
+                        let tracks = snapshot.tracks
                         if playNext {
                             let insertIndex = currentQueueIndex + 1
                             orderedPlaybackQueue.insert(contentsOf: tracks, at: insertIndex)
@@ -309,14 +312,14 @@ final class QueueManager: ObservableObject {
         }
     }
 
-    func playStationRecommendation(_ recommendation: PlexStationRecommendation) {
+    func playStationRecommendation(_ recommendation: MediaStationRecommendation) {
         guard let plexService = context.plexService,
               let server = context.libraryStore?.selectedPlexServer,
               let userToken = plexService.authService.authToken else { return }
 
         switch recommendation.kind {
         case .artist:
-            guard let station = recommendation.station?.mediaStation else { return }
+            guard let station = recommendation.station else { return }
             let pendingID = PendingPlaybackID.recommendation(recommendation.id)
             pendingPlaybackID = pendingID
             Task {
@@ -381,6 +384,8 @@ final class QueueManager: ObservableObject {
             Task {
                 await playCurrentTrack()
             }
+        } else {
+            updatePrebufferedNextTrack()
         }
     }
 
@@ -422,6 +427,7 @@ final class QueueManager: ObservableObject {
         let adjustedTarget = sourceIndex < targetIndex ? targetIndex - 1 : targetIndex
         playbackQueue.insert(track, at: adjustedTarget)
         visiblePlayQueue = playbackQueue
+        updatePrebufferedNextTrack()
     }
 
     func clearUpcomingPlayQueueTracks() {
@@ -462,6 +468,7 @@ final class QueueManager: ObservableObject {
         playbackQueue = Array(playbackQueue.prefix(currentIdx + 1))
         visiblePlayQueue = playbackQueue
         isShuffleEnabled = false
+        updatePrebufferedNextTrack()
         logDebug("Cleared upcoming tracks")
     }
 
@@ -555,6 +562,7 @@ final class QueueManager: ObservableObject {
         playQueueID = nil
         playQueueVersion = nil
         playQueueTotalCount = 0
+        context.playbackEngine?.prebufferNextTrack(nil)
     }
 
     // MARK: - Private
@@ -672,7 +680,7 @@ final class QueueManager: ObservableObject {
         self.context.libraryStore?.isLoadingLibrary = false
     }
 
-    private func playAlbumRadioRecommendation(_ recommendation: PlexStationRecommendation, plexService: PlexService, server: PlexServer, library: PlexMusicLibrary, userToken: String) async {
+    private func playAlbumRadioRecommendation(_ recommendation: MediaStationRecommendation, plexService: PlexService, server: PlexServer, library: PlexMusicLibrary, userToken: String) async {
         self.context.libraryStore?.isLoadingLibrary = true
         self.context.libraryStore?.libraryLoadError = nil
         logDebug("Starting album radio for \(recommendation.title)")
@@ -724,6 +732,7 @@ final class QueueManager: ObservableObject {
             currentQueueIndex = 0
             self.context.libraryStore?.resetQueueStationRecommendations()
             self.context.playbackEngine?.playbackState = .stopped
+            self.context.playbackEngine?.prebufferNextTrack(nil)
             return
         }
 
@@ -742,6 +751,7 @@ final class QueueManager: ObservableObject {
 
         visiblePlayQueue = playbackQueue
         self.context.libraryStore?.refreshQueueStationRecommendations(for: playbackQueue)
+        updatePrebufferedNextTrack()
     }
 
     private func performQueueOperation(_ operation: @escaping () async throws -> Void) async {
@@ -770,6 +780,11 @@ final class QueueManager: ObservableObject {
     private func playCurrentTrack() async {
         guard let track = self.currentTrack else { return }
         await self.context.playbackEngine?.play(track: track)
+        updatePrebufferedNextTrack()
+    }
+
+    private func updatePrebufferedNextTrack() {
+        context.playbackEngine?.prebufferNextTrack(nextTrack)
     }
 
     private func logDebug(_ message: String) {

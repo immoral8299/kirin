@@ -23,7 +23,7 @@ final class LibraryStore: ObservableObject {
     @Published var currentLoadingMessage: String?
     @Published var shouldPresentInitialLoadFailure = false
     @Published var relatedAlbums: [MediaAlbum] = []
-    @Published var queueStationRecommendations: [PlexStationRecommendation] = []
+    @Published var queueStationRecommendations: [MediaStationRecommendation] = []
 
     private let context: StoreContext
     private var relatedAlbumsTask: Task<Void, Never>?
@@ -311,7 +311,7 @@ final class LibraryStore: ObservableObject {
         guard !seedIDs.isEmpty else { return }
 
         queueStationRecommendationsTask = Task {
-            var recommendations: [PlexStationRecommendation] = []
+            var recommendations: [MediaStationRecommendation] = []
 
             for seed in artistSeeds {
                 guard !Task.isCancelled else { return }
@@ -321,7 +321,7 @@ final class LibraryStore: ObservableObject {
                         artistRatingKey: seed.id,
                         userToken: userToken
                     ) {
-                        recommendations.append(seed.recommendation(kind: .artist, station: station))
+                        recommendations.append(seed.recommendation(kind: .artist, station: station.mediaStation))
                     }
                 } catch {
                     logDebug("Artist station lookup failed: \(error.localizedDescription)")
@@ -353,8 +353,8 @@ final class LibraryStore: ObservableObject {
         let title: String
         let artworkURL: URL?
 
-        func recommendation(kind: PlexStationRecommendationKind, station: PlexStation? = nil) -> PlexStationRecommendation {
-            PlexStationRecommendation(
+        func recommendation(kind: MediaStationRecommendationKind, station: MediaStation? = nil) -> MediaStationRecommendation {
+            MediaStationRecommendation(
                 kind: kind,
                 seedID: id,
                 title: title,
