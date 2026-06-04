@@ -26,10 +26,12 @@ final class PlaybackEngine: ObservableObject {
     private var playerItemStatusObserver: AnyCancellable?
     private var playerTimeControlStatusObserver: AnyCancellable?
     private var deferredBufferingTransitionTask: Task<Void, Never>?
+    private var bufferingRetryTask: Task<Void, Never>?
     private var lastPlaybackProgressDate: Date?
     private var playbackPreparationID: Int = 0
     private var prebufferPreparationID: Int = 0
     private var seekID: Int = 0
+    private var bufferingRetryCount = 0
     private var isPlaybackRequested = false
     private var loudnessGainCache: [String: Float] = [:]
     private var missingLoudnessAnalysisTrackIDs = Set<String>()
@@ -39,6 +41,10 @@ final class PlaybackEngine: ObservableObject {
     private var prebufferTask: Task<Void, Never>?
     private let fallbackLoudnessGain: Float = -6
     private let bufferingTransitionDelayNanoseconds: UInt64 = 1_500_000_000
+    private let bufferingRetryDelayNanoseconds: UInt64 = 8_000_000_000
+    private let maximumBufferingRetryCount = 3
+    private let prebufferRetryDelayNanoseconds: UInt64 = 2_000_000_000
+    private let maximumPrebufferRetryCount = 3
 
     init(context: StoreContext) {
         self.context = context
@@ -64,6 +70,7 @@ final class PlaybackEngine: ObservableObject {
         switch playbackState {
         case .playing, .buffering:
             isPlaybackRequested = false
+            cancelBufferingRetry()
             player.pause()
             transitionPlaybackState(to: .paused)
         case .paused, .stopped:
@@ -144,7 +151,9 @@ final class PlaybackEngine: ObservableObject {
         playerItemStatusObserver = nil
         playerTimeControlStatusObserver = nil
         cancelDeferredBufferingTransition()
+        cancelBufferingRetry()
         lastPlaybackProgressDate = nil
+        bufferingRetryCount = 0
         player = nil
         clearPrebufferedTrack()
     }
@@ -171,18 +180,25 @@ final class PlaybackEngine: ObservableObject {
         prebufferedTrackID = nil
         prebufferedItem = nil
         prebufferTask = Task {
-            let asset = AVURLAsset(url: track.streamURL)
-            do {
-                _ = try await asset.load(.isPlayable)
-                guard !Task.isCancelled, preparationID == self.prebufferPreparationID else { return }
-                self.prebufferedTrackID = track.id
-                self.prebufferedItem = AVPlayerItem(asset: asset)
-                self.logDebug("Prebuffered next track \(track.title)")
-            } catch {
-                guard !Task.isCancelled, preparationID == self.prebufferPreparationID else { return }
-                self.prebufferedTrackID = nil
-                self.prebufferedItem = nil
-                self.logDebug("Prebuffer next track failed for \(track.title): \(error.localizedDescription)")
+            for attempt in 1...maximumPrebufferRetryCount {
+                let asset = AVURLAsset(url: track.streamURL)
+                do {
+                    _ = try await asset.load(.isPlayable)
+                    guard !Task.isCancelled, preparationID == self.prebufferPreparationID else { return }
+                    self.prebufferedTrackID = track.id
+                    self.prebufferedItem = AVPlayerItem(asset: asset)
+                    self.logDebug("Prebuffered next track \(track.title)")
+                    return
+                } catch {
+                    guard !Task.isCancelled, preparationID == self.prebufferPreparationID else { return }
+                    self.prebufferedTrackID = nil
+                    self.prebufferedItem = nil
+                    self.logDebug("Prebuffer next track failed for \(track.title) (attempt \(attempt)/\(maximumPrebufferRetryCount)): \(error.localizedDescription)")
+
+                    guard attempt < maximumPrebufferRetryCount else { return }
+                    try? await Task.sleep(nanoseconds: prebufferRetryDelayNanoseconds)
+                    guard !Task.isCancelled, preparationID == self.prebufferPreparationID else { return }
+                }
             }
         }
     }
@@ -210,6 +226,8 @@ final class PlaybackEngine: ObservableObject {
 
         invalidatePendingSeek()
         lastPlaybackProgressDate = nil
+        bufferingRetryCount = 0
+        cancelBufferingRetry()
         context.timelineTracker?.beginTracking(track)
         context.libraryStore?.refreshRelatedAlbums(for: track)
         let item = preparedPlayerItem(for: track)
@@ -329,6 +347,7 @@ final class PlaybackEngine: ObservableObject {
     private func preparedPlayerItem(for track: MediaTrack) -> AVPlayerItem {
         guard prebufferedTrackID == track.id,
               let prebufferedItem else {
+            logDebug("No prebuffered item for \(track.title); starting stream directly")
             return AVPlayerItem(url: track.streamURL)
         }
 
@@ -348,9 +367,13 @@ final class PlaybackEngine: ObservableObject {
                         self.updatePlaybackTiming(from: item)
                         if self.isPlaybackRequested {
                             self.transitionPlaybackState(to: .playing)
+                            self.scheduleBufferingRetryIfNeeded()
                         }
                     case .failed:
-                        self.transitionPlaybackState(to: .paused)
+                        self.transitionPlaybackState(to: self.isPlaybackRequested ? .buffering : .paused)
+                        if self.isPlaybackRequested {
+                            self.scheduleBufferingRetryIfNeeded()
+                        }
                     case .unknown:
                         break
                     @unknown default:
@@ -373,6 +396,8 @@ final class PlaybackEngine: ObservableObject {
                         self.lastPlaybackProgressDate = Date()
                         if self.isPlaybackRequested {
                             self.cancelDeferredBufferingTransition()
+                            self.cancelBufferingRetry()
+                            self.bufferingRetryCount = 0
                             self.transitionPlaybackState(to: .playing)
                         }
                     }
@@ -427,24 +452,33 @@ final class PlaybackEngine: ObservableObject {
             cancelDeferredBufferingTransition()
             if isPlaybackRequested, player?.currentItem?.status == .readyToPlay {
                 transitionPlaybackState(to: .playing)
+                scheduleBufferingRetryIfNeeded()
             } else {
+                if !isPlaybackRequested {
+                    cancelBufferingRetry()
+                }
                 transitionPlaybackState(to: isPlaybackRequested ? .buffering : .paused)
             }
         case .waitingToPlayAtSpecifiedRate:
             if isPlaybackRequested {
                 scheduleDeferredBufferingTransition()
+                scheduleBufferingRetryIfNeeded()
             } else {
                 cancelDeferredBufferingTransition()
+                cancelBufferingRetry()
                 transitionPlaybackState(to: .paused)
             }
         case .playing:
             cancelDeferredBufferingTransition()
+            cancelBufferingRetry()
             transitionPlaybackState(to: isPlaybackRequested ? .playing : .paused)
         @unknown default:
             if isPlaybackRequested {
                 scheduleDeferredBufferingTransition()
+                scheduleBufferingRetryIfNeeded()
             } else {
                 cancelDeferredBufferingTransition()
+                cancelBufferingRetry()
                 transitionPlaybackState(to: .paused)
             }
         }
@@ -483,6 +517,84 @@ final class PlaybackEngine: ObservableObject {
     private func cancelDeferredBufferingTransition() {
         deferredBufferingTransitionTask?.cancel()
         deferredBufferingTransitionTask = nil
+    }
+
+    private func scheduleBufferingRetryIfNeeded() {
+        guard bufferingRetryTask == nil,
+              isPlaybackRequested,
+              let track = _currentTrack,
+              bufferingRetryCount < maximumBufferingRetryCount else { return }
+
+        let preparationID = playbackPreparationID
+        let trackID = track.id
+        let trackTitle = track.title
+        let streamURL = track.streamURL
+        let delay = bufferingRetryDelayNanoseconds
+
+        bufferingRetryTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: delay)
+            guard !Task.isCancelled else { return }
+
+            await MainActor.run {
+                guard let self else { return }
+                self.bufferingRetryTask = nil
+                guard self.shouldRetryBuffering(trackID: trackID, preparationID: preparationID) else { return }
+                self.retryBufferingPlayback(trackID: trackID, title: trackTitle, streamURL: streamURL)
+            }
+        }
+    }
+
+    private func shouldRetryBuffering(trackID: String, preparationID: Int) -> Bool {
+        guard isPlaybackRequested,
+              playbackPreparationID == preparationID,
+              _currentTrack?.id == trackID,
+              !hasRecentPlaybackProgress,
+              bufferingRetryCount < maximumBufferingRetryCount else { return false }
+
+        if player?.currentItem?.status == .failed {
+            return true
+        }
+
+        return player?.timeControlStatus == .waitingToPlayAtSpecifiedRate || playbackState == .buffering
+    }
+
+    private func retryBufferingPlayback(trackID: String, title: String, streamURL: URL) {
+        bufferingRetryCount += 1
+        logDebug("Retrying playback for \(title) after buffering stalled (attempt \(bufferingRetryCount)/\(maximumBufferingRetryCount))")
+
+        if prebufferedTrackID == trackID {
+            prebufferedTrackID = nil
+            prebufferedItem = nil
+        }
+
+        let resumeTime = playbackPosition
+        let item = AVPlayerItem(url: streamURL)
+        observePlaybackEnd(for: item)
+        observePlayerItemStatus(for: item)
+
+        if let player {
+            player.replaceCurrentItem(with: item)
+        } else {
+            player = AVPlayer(playerItem: item)
+            observePlaybackTime()
+            observePlayerTimeControlStatus()
+        }
+
+        updatePlaybackTiming(from: item)
+        if resumeTime > 1 {
+            playbackPosition = resumeTime
+            let targetTime = CMTime(seconds: resumeTime, preferredTimescale: 600)
+            player?.seek(to: targetTime, toleranceBefore: .zero, toleranceAfter: .zero)
+        }
+        player?.play()
+        transitionPlaybackState(to: .buffering)
+        synchronizePlaybackState(with: player?.timeControlStatus ?? .waitingToPlayAtSpecifiedRate)
+        scheduleBufferingRetryIfNeeded()
+    }
+
+    private func cancelBufferingRetry() {
+        bufferingRetryTask?.cancel()
+        bufferingRetryTask = nil
     }
 
     private func transitionPlaybackState(to newState: PlaybackState) {
