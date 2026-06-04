@@ -25,6 +25,8 @@ final class PlaybackEngine: ObservableObject {
     private var playerItemEndObserver: AnyCancellable?
     private var playerItemStatusObserver: AnyCancellable?
     private var playerTimeControlStatusObserver: AnyCancellable?
+    private var deferredBufferingTransitionTask: Task<Void, Never>?
+    private var lastPlaybackProgressDate: Date?
     private var playbackPreparationID: Int = 0
     private var prebufferPreparationID: Int = 0
     private var seekID: Int = 0
@@ -36,6 +38,7 @@ final class PlaybackEngine: ObservableObject {
     private var prebufferedItem: AVPlayerItem?
     private var prebufferTask: Task<Void, Never>?
     private let fallbackLoudnessGain: Float = -6
+    private let bufferingTransitionDelayNanoseconds: UInt64 = 1_500_000_000
 
     init(context: StoreContext) {
         self.context = context
@@ -139,6 +142,9 @@ final class PlaybackEngine: ObservableObject {
         removeTimeObserver()
         playerItemEndObserver = nil
         playerItemStatusObserver = nil
+        playerTimeControlStatusObserver = nil
+        cancelDeferredBufferingTransition()
+        lastPlaybackProgressDate = nil
         player = nil
         clearPrebufferedTrack()
     }
@@ -203,6 +209,7 @@ final class PlaybackEngine: ObservableObject {
         guard preparationID == playbackPreparationID else { return }
 
         invalidatePendingSeek()
+        lastPlaybackProgressDate = nil
         context.timelineTracker?.beginTracking(track)
         context.libraryStore?.refreshRelatedAlbums(for: track)
         let item = preparedPlayerItem(for: track)
@@ -362,6 +369,13 @@ final class PlaybackEngine: ObservableObject {
             Task { @MainActor in
                 let seconds = time.seconds
                 if seconds.isFinite, self.pendingSeekProgress == nil {
+                    if seconds > self.playbackPosition + 0.1 {
+                        self.lastPlaybackProgressDate = Date()
+                        if self.isPlaybackRequested {
+                            self.cancelDeferredBufferingTransition()
+                            self.transitionPlaybackState(to: .playing)
+                        }
+                    }
                     self.playbackPosition = max(0, seconds)
                 }
 
@@ -410,18 +424,65 @@ final class PlaybackEngine: ObservableObject {
     private func synchronizePlaybackState(with timeControlStatus: AVPlayer.TimeControlStatus) {
         switch timeControlStatus {
         case .paused:
+            cancelDeferredBufferingTransition()
             if isPlaybackRequested, player?.currentItem?.status == .readyToPlay {
                 transitionPlaybackState(to: .playing)
             } else {
                 transitionPlaybackState(to: isPlaybackRequested ? .buffering : .paused)
             }
         case .waitingToPlayAtSpecifiedRate:
-            transitionPlaybackState(to: isPlaybackRequested ? .buffering : .paused)
+            if isPlaybackRequested {
+                scheduleDeferredBufferingTransition()
+            } else {
+                cancelDeferredBufferingTransition()
+                transitionPlaybackState(to: .paused)
+            }
         case .playing:
+            cancelDeferredBufferingTransition()
             transitionPlaybackState(to: isPlaybackRequested ? .playing : .paused)
         @unknown default:
-            transitionPlaybackState(to: isPlaybackRequested ? .buffering : .paused)
+            if isPlaybackRequested {
+                scheduleDeferredBufferingTransition()
+            } else {
+                cancelDeferredBufferingTransition()
+                transitionPlaybackState(to: .paused)
+            }
         }
+    }
+
+    private func scheduleDeferredBufferingTransition() {
+        guard playbackState == .playing else {
+            cancelDeferredBufferingTransition()
+            transitionPlaybackState(to: .buffering)
+            return
+        }
+
+        guard deferredBufferingTransitionTask == nil else { return }
+
+        let delay = bufferingTransitionDelayNanoseconds
+        deferredBufferingTransitionTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: delay)
+            guard !Task.isCancelled else { return }
+
+            await MainActor.run {
+                guard let self else { return }
+                self.deferredBufferingTransitionTask = nil
+                guard self.isPlaybackRequested,
+                      self.player?.timeControlStatus == .waitingToPlayAtSpecifiedRate else { return }
+                guard !self.hasRecentPlaybackProgress else { return }
+                self.transitionPlaybackState(to: .buffering)
+            }
+        }
+    }
+
+    private var hasRecentPlaybackProgress: Bool {
+        guard let lastPlaybackProgressDate else { return false }
+        return Date().timeIntervalSince(lastPlaybackProgressDate) < 2
+    }
+
+    private func cancelDeferredBufferingTransition() {
+        deferredBufferingTransitionTask?.cancel()
+        deferredBufferingTransitionTask = nil
     }
 
     private func transitionPlaybackState(to newState: PlaybackState) {

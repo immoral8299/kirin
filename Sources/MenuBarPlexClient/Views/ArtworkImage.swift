@@ -29,13 +29,56 @@ struct ArtworkImage: View {
             .overlay {
                 Image(systemName: placeholderSystemImage)
                     .foregroundStyle(.secondary.opacity(0.55))
+                    .artworkLoadingPulse(isLoading)
             }
-            .overlay {
-                if isLoading {
-                    ProgressView()
-                        .controlSize(.small)
+    }
+}
+
+private struct ArtworkLoadingPulseModifier: ViewModifier {
+    let isActive: Bool
+    @State private var isDimmed = false
+    @State private var pulseTask: Task<Void, Never>?
+
+    func body(content: Content) -> some View {
+        content
+            .opacity(isDimmed ? 0.45 : 1)
+            .animation(.easeInOut(duration: 0.7), value: isDimmed)
+            .onAppear {
+                guard isActive else { return }
+                startPulsing()
+            }
+            .onChange(of: isActive) { newValue in
+                if newValue {
+                    startPulsing()
+                } else {
+                    stopPulsing()
                 }
             }
+            .onDisappear(perform: stopPulsing)
+    }
+
+    private func startPulsing() {
+        pulseTask?.cancel()
+        isDimmed = true
+        pulseTask = Task {
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(0.7))
+                guard !Task.isCancelled else { break }
+                isDimmed.toggle()
+            }
+        }
+    }
+
+    private func stopPulsing() {
+        pulseTask?.cancel()
+        pulseTask = nil
+        isDimmed = false
+    }
+}
+
+private extension View {
+    func artworkLoadingPulse(_ isActive: Bool) -> some View {
+        modifier(ArtworkLoadingPulseModifier(isActive: isActive))
     }
 }
 
