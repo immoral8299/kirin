@@ -9,9 +9,10 @@ struct RelatedAlbumsSection: View {
     let onAddToQueue: (MediaAlbum) -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 12) {
             Text("Related Albums")
                 .font(.system(size: 12, weight: .bold, design: .rounded))
+                .foregroundStyle(AppTheme.accent)
 
             HStack(alignment: .top, spacing: 10) {
                 ForEach(Array(albums.prefix(4))) { album in

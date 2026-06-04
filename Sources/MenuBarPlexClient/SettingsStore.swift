@@ -9,7 +9,6 @@ final class SettingsStore: ObservableObject {
     }
 
     private let defaults: UserDefaults
-    private let legacySettingsKey = "app.settings"
     private let activeProfileKey = "app.settings.activeProfileKey"
     private let profilePrefix = "app.settings.profile."
     private var currentProfileKey: String?
@@ -21,9 +20,6 @@ final class SettingsStore: ObservableObject {
 
         if let currentProfileKey,
            let decoded = Self.loadSettings(for: currentProfileKey, defaults: defaults, profilePrefix: profilePrefix) {
-            settings = decoded
-        } else if let data = defaults.data(forKey: legacySettingsKey),
-                  let decoded = try? JSONDecoder().decode(AppSettings.self, from: data) {
             settings = decoded
         } else {
             settings = .default
@@ -46,11 +42,8 @@ final class SettingsStore: ObservableObject {
 
     private func persist(_ settings: AppSettings) {
         guard let data = try? JSONEncoder().encode(settings) else { return }
-        if let currentProfileKey {
-            defaults.set(data, forKey: profilePrefix + currentProfileKey)
-        } else {
-            defaults.set(data, forKey: legacySettingsKey)
-        }
+        guard let currentProfileKey else { return }
+        defaults.set(data, forKey: profilePrefix + currentProfileKey)
     }
 
     private static func loadSettings(for key: String, defaults: UserDefaults, profilePrefix: String) -> AppSettings? {

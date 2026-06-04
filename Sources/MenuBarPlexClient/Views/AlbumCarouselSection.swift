@@ -11,12 +11,15 @@ struct AlbumCarouselSection: View {
     let onPlayNext: (MediaAlbum) -> Void
     let onAddToQueue: (MediaAlbum) -> Void
     @State private var page = 0
+    @State private var pageAnimationTask: Task<Void, Never>?
+    @State private var displayedItems: [MediaAlbum?] = []
+    @State private var previousPage = 0
 
     var body: some View {
         if !items.isEmpty {
-            CarouselContainer(title: title, page: $page, maxPage: maxPage) {
+            CarouselContainer(title: title, page: $page, maxPage: maxPage, loop: true) {
                 HStack(spacing: 10) {
-                    ForEach(Array(currentItems.enumerated()), id: \.offset) { _, album in
+                    ForEach(Array(displayedItems.enumerated()), id: \.offset) { _, album in
                         if let album {
                             Button {
                                 onSelect(album)
@@ -54,8 +57,26 @@ struct AlbumCarouselSection: View {
                 }
                 .frame(width: MenuBarLayout.contentWidth - 2, alignment: .leading)
             }
+            .onAppear {
+                if displayedItems.isEmpty {
+                    displayedItems = currentPageItems(for: page)
+                    previousPage = page
+                }
+            }
+            .onChange(of: page) { _ in
+                let direction = animationDirection(from: previousPage, to: page)
+                previousPage = page
+                startPageAnimation(direction: direction)
+            }
             .onChange(of: items.count) { _ in
-                page = min(page, maxPage)
+                let clampedPage = min(page, maxPage)
+                if clampedPage != page {
+                    page = clampedPage
+                    return
+                }
+                displayedItems = currentPageItems(for: page)
+                previousPage = page
+                startPageAnimation(direction: .forward)
             }
         }
     }
@@ -65,7 +86,7 @@ struct AlbumCarouselSection: View {
         return (items.count - 1) / pageSize
     }
 
-    private var currentItems: [MediaAlbum?] {
+    private func currentPageItems(for page: Int) -> [MediaAlbum?] {
         let start = page * pageSize
         guard start < items.count else {
             return Array(repeating: nil, count: pageSize)
@@ -78,5 +99,53 @@ struct AlbumCarouselSection: View {
         }
 
         return pageItems
+    }
+
+    private enum AnimationDirection {
+        case forward
+        case backward
+    }
+
+    private func animationDirection(from previousPage: Int, to newPage: Int) -> AnimationDirection {
+        if previousPage == newPage {
+            return .forward
+        }
+
+        if previousPage == maxPage && newPage == 0 {
+            return .forward
+        }
+
+        if previousPage == 0 && newPage == maxPage {
+            return .backward
+        }
+
+        return newPage > previousPage ? .forward : .backward
+    }
+
+    private func startPageAnimation(direction: AnimationDirection) {
+        pageAnimationTask?.cancel()
+
+        let targetItems = currentPageItems(for: page)
+        pageAnimationTask = Task { @MainActor in
+            guard displayedItems.count == pageSize else {
+                displayedItems = targetItems
+                return
+            }
+
+            let indices = direction == .forward ? Array(0..<pageSize) : Array((0..<pageSize).reversed())
+
+            for (position, index) in indices.enumerated() {
+                if Task.isCancelled { return }
+
+                if position > 0 {
+                    try? await Task.sleep(for: .milliseconds(45))
+                    if Task.isCancelled { return }
+                }
+
+                withAnimation(.easeOut(duration: 0.18)) {
+                    displayedItems[index] = targetItems[index]
+                }
+            }
+        }
     }
 }

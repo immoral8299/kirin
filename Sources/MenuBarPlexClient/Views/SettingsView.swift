@@ -12,6 +12,8 @@ struct SettingsView: View {
     let onSignOut: () -> Void
     let onPanelPositionChange: () -> Void
     var onImportLocalFiles: (() -> Void)?
+    let paddingSpaceWidth: CGFloat = 40
+    let maxPickerLabelWidth: CGFloat = 180
 
     var body: some View {
         VStack(spacing: 12) {
@@ -117,10 +119,8 @@ struct SettingsView: View {
             toggleRow("Recently Played Albums", isOn: showRecentlyPlayedBinding)
             dividerRow
             toggleRow("Recently Added Albums", isOn: showRecentlyAddedBinding)
-            if isPlexSource {
-                dividerRow
-                toggleRow("Playlists", isOn: showPlaylistsBinding)
-            }
+            dividerRow
+            toggleRow("Playlists", isOn: showPlaylistsBinding)
             dividerRow
             toggleRow("Stations", isOn: showStationsBinding)
         }
@@ -312,26 +312,56 @@ struct SettingsView: View {
     }
 
     private func pickerRow<Value: Hashable>(_ title: String, selection: Binding<Value>, items: [(String, Value)]) -> some View {
-        HStack {
+        let maxLabelWidth = items.map { label, _ in
+            let font = NSFont.systemFont(ofSize: 12, weight: .medium)
+            let attributes = [NSAttributedString.Key.font: font]
+            let size = (label as NSString).size(withAttributes: attributes)
+            return size.width
+        }.max() ?? 80
+
+        return HStack {
             Text(title)
                 .font(.system(size: 12, weight: .medium, design: .rounded))
                 .foregroundStyle(.primary)
 
             Spacer()
 
-            Picker(title, selection: selection) {
+            Menu {
                 ForEach(items, id: \.0) { label, value in
-                    Text(label).tag(value)
+                    Button {
+                        selection.wrappedValue = value
+                    } label: {
+                        HStack {
+                            Text(label)
+                            Spacer()
+                            if selection.wrappedValue == value {
+                                Image(systemName: "checkmark")
+                            }
+                        }
+                    }
                 }
+            } label: {
+                HStack(spacing: 6) {
+                    Text(labelText(for: selection.wrappedValue, items: items))
+                        .lineLimit(1)
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.system(size: 10, weight: .semibold))
+                }
+                .padding(.horizontal, 6)
+                .padding(.vertical, 4)
+                .frame(maxWidth: maxLabelWidth + paddingSpaceWidth, alignment: .trailing)
+                .background(AppTheme.settingsFieldFill, in: RoundedRectangle(cornerRadius: AppCornerRadius.small, style: .continuous))
             }
-            .labelsHidden()
-            .pickerStyle(.menu)
-            .tint(.primary)
-            .frame(maxWidth: 160, alignment: .trailing)
+            .buttonStyle(.plain)
+            .frame(maxWidth: maxPickerLabelWidth, alignment: .trailing)
             .interactiveCursor(disabled: items.isEmpty)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
+    }
+
+    private func labelText<Value: Hashable>(for selection: Value, items: [(String, Value)]) -> String {
+        items.first(where: { _, value in value == selection })?.0 ?? "Select..."
     }
 
     private func toggleRow(_ title: String, isOn: Binding<Bool>) -> some View {

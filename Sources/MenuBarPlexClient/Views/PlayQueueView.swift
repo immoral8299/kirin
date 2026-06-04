@@ -19,6 +19,7 @@ struct PlayQueueView: View {
             HStack {
                 Text("Play Queue")
                     .font(.system(size: 12, weight: .bold, design: .rounded))
+                    .foregroundStyle(AppTheme.accent)
 
                 Spacer()
 

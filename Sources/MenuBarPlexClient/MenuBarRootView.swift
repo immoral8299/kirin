@@ -115,8 +115,13 @@ struct MenuBarRootView: View {
             .focusable(false)
             .interactiveCursor()
 
-            Text(tabTitle)
-                .font(.system(size: 14, weight: .bold, design: .rounded))
+            HStack(alignment: .bottom, spacing: 4) {
+                Text("Kirin")
+                    .font(.system(size: 14, weight: .bold, design: .rounded))
+                Text(tabTitle)
+                    .font(.system(size: 12, design: .rounded))
+                    .foregroundStyle(.secondary.opacity(0.8))
+            }
 
             Spacer()
 
@@ -140,20 +145,20 @@ struct MenuBarRootView: View {
     private var tabTitle: String {
         switch selectedTab {
         case .home:
-            return "Kirin"
+            return ""
         case .queue:
-            return "Kirin / Queue"
+            return "/ Queue"
         case .search:
-            return "Kirin / Search"
+            return "/ Search"
         case .settings:
-            return "Kirin / Settings"
+            return "/ Settings"
         }
     }
 
     private func tabButton(_ tab: ContentTab, icon: String, tooltip: String) -> some View {
         Button {
             selectedTab = tab
-            onPinChange(tab == .settings)
+            onPinChange(false)
         } label: {
             Image(systemName: icon)
                 .frame(width: 16, height: 16)
@@ -540,6 +545,7 @@ private struct QueueContent: View {
                 onImportLocalFiles: { Task { await appState.importLocalFiles() } }
             )
         }
+        .padding(.top, 5.5)
         .animation(.easeInOut(duration: 0.25), value: libraryStore.queueStationRecommendations.count + libraryStore.relatedAlbums.count)
     }
 }

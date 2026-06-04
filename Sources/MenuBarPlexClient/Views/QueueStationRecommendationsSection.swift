@@ -11,6 +11,7 @@ struct QueueStationRecommendationsSection: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Stations")
                     .font(.system(size: 12, weight: .bold, design: .rounded))
+                    .foregroundStyle(AppTheme.accent)
 
                 LazyVGrid(columns: columns, alignment: .leading, spacing: 8) {
                     ForEach(recommendations) { recommendation in
