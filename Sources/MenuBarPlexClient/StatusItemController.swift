@@ -9,6 +9,7 @@ fileprivate enum StatusBarConfig {
     static let topRightScreenMargin = NSSize(width: 4, height: 4)
     static let panelSize = NSSize(width: 460, height: 520)
     static let iconFontSize: CGFloat = 11
+    static let iconVerticalOffset: CGFloat = 1
     static let marqueeFontSize: CGFloat = 13
     static let iconTitleSpacing = "  "
     static let panelAnimationDuration: TimeInterval = 0.16
@@ -245,11 +246,17 @@ final class StatusItemController: NSObject {
 
     private func statusImage(named iconName: String) -> NSImage? {
         let configuration = NSImage.SymbolConfiguration(pointSize: StatusBarConfig.iconFontSize, weight: .medium)
-        let image = NSImage(systemSymbolName: iconName, accessibilityDescription: nil)?
+        guard let image = NSImage(systemSymbolName: iconName, accessibilityDescription: nil)?
             .withSymbolConfiguration(configuration)
+        else { return nil }
 
-        image?.isTemplate = true
-        return image
+        let shiftedImage = NSImage(size: image.size, flipped: false) { rect in
+            image.draw(in: rect.offsetBy(dx: 0, dy: StatusBarConfig.iconVerticalOffset))
+            return true
+        }
+
+        shiftedImage.isTemplate = true
+        return shiftedImage
     }
 
     private func statusTitle(_ text: String) -> String {
