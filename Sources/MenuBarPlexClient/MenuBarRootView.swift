@@ -168,11 +168,11 @@ struct MenuBarRootView: View {
                 .contentShape(Rectangle())
                 .background(selectedTab == tab ? AppTheme.overlayStrong : .clear, in: RoundedRectangle(cornerRadius: AppCornerRadius.compact, style: .continuous))
                 .overlay(alignment: .topTrailing) {
-                    if tab == .settings && updateChecker.hasUpdateAvailable {
+                    if tab == .settings && updateChecker.hasDownloadableRelease {
                         Circle()
                             .fill(.red)
                             .frame(width: 7, height: 7)
-                            .offset(x: -3, y: 3)
+                            .offset(x: -5, y: 5)
                     }
                 }
         }

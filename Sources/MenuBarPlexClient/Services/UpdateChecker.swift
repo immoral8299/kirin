@@ -25,6 +25,7 @@ enum UpdateCheckState: Equatable {
 @MainActor
 final class UpdateChecker: ObservableObject {
     @Published private(set) var state: UpdateCheckState = .idle
+    @Published private(set) var lastSuccessfulState: UpdateCheckState?
     @Published private(set) var lastCheckDate: Date?
 
     private let manifestURL: URL
@@ -33,6 +34,7 @@ final class UpdateChecker: ObservableObject {
     private let defaults: UserDefaults
     private let lastCheckDateKey = "app.updateChecker.lastCheckDate"
     private let automaticCheckInterval: TimeInterval = 24 * 60 * 60
+    private let minimumVisibleCheckDuration: TimeInterval = 0.6
 
     init(
         manifestURL: URL = UpdateEndpoints.releaseManifest,
@@ -48,10 +50,32 @@ final class UpdateChecker: ObservableObject {
     }
 
     var hasUpdateAvailable: Bool {
-        if case .updateAvailable = state {
+        switch state {
+        case .updateAvailable:
             return true
+        case .checking:
+            if case .updateAvailable = lastSuccessfulState {
+                return true
+            }
+            return false
+        case .idle, .upToDate, .informational, .failed:
+            return false
         }
-        return false
+    }
+
+    var hasDownloadableRelease: Bool {
+        retainedDownloadableRelease != nil
+    }
+
+    var retainedDownloadableRelease: ReleaseManifest? {
+        switch state {
+        case let .updateAvailable(release), let .informational(release):
+            return release
+        case .checking:
+            return lastSuccessfulState?.downloadableRelease
+        case .idle, .upToDate, .failed:
+            return nil
+        }
     }
 
     var currentVersion: String? {
@@ -77,27 +101,36 @@ final class UpdateChecker: ObservableObject {
         defer { markLastCheckDate() }
 
         do {
-            let (data, response) = try await session.data(from: manifestURL)
-            if let httpResponse = response as? HTTPURLResponse,
-               !(200...299).contains(httpResponse.statusCode) {
-                state = .failed("Update check failed with HTTP \(httpResponse.statusCode).")
-                return
+            let resolvedState = try await MinimumDurationTask.run(minimumDuration: minimumVisibleCheckDuration) {
+                try await resolveUpdateState()
             }
 
-            let manifest = try JSONDecoder().decode(ReleaseManifest.self, from: data)
-            guard let currentVersion,
-                  !currentVersion.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                state = .informational(manifest)
-                return
-            }
-
-            if Self.compareVersions(manifest.version, currentVersion) == .orderedDescending {
-                state = .updateAvailable(manifest)
-            } else {
-                state = .upToDate(manifest)
+            state = resolvedState
+            if resolvedState.isSuccessfulResult {
+                lastSuccessfulState = resolvedState
             }
         } catch {
             state = .failed("Could not check for updates. Please try again.")
+        }
+    }
+
+    private func resolveUpdateState() async throws -> UpdateCheckState {
+        let (data, response) = try await session.data(from: manifestURL)
+        if let httpResponse = response as? HTTPURLResponse,
+           !(200...299).contains(httpResponse.statusCode) {
+            return .failed("Update check failed with HTTP \(httpResponse.statusCode).")
+        }
+
+        let manifest = try JSONDecoder().decode(ReleaseManifest.self, from: data)
+        guard let currentVersion,
+              !currentVersion.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return .informational(manifest)
+        }
+
+        if Self.compareVersions(manifest.version, currentVersion) == .orderedDescending {
+            return .updateAvailable(manifest)
+        } else {
+            return .upToDate(manifest)
         }
     }
 
@@ -136,6 +169,26 @@ final class UpdateChecker: ObservableObject {
         let date = Date()
         lastCheckDate = date
         defaults.set(date, forKey: lastCheckDateKey)
+    }
+}
+
+private extension UpdateCheckState {
+    var isSuccessfulResult: Bool {
+        switch self {
+        case .upToDate, .updateAvailable, .informational:
+            return true
+        case .idle, .checking, .failed:
+            return false
+        }
+    }
+
+    var downloadableRelease: ReleaseManifest? {
+        switch self {
+        case let .updateAvailable(release), let .informational(release):
+            return release
+        case .idle, .checking, .upToDate, .failed:
+            return nil
+        }
     }
 }
 

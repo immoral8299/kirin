@@ -16,6 +16,7 @@ final class AppState {
     private let context: StoreContext
     private var mediaService: MediaService
     private var cancellables = Set<AnyCancellable>()
+    private var hasRequestedFirstPanelUpdateCheck = false
 
     // MARK: - Forwarded computed properties
 
@@ -124,6 +125,21 @@ final class AppState {
         Task {
             await updateChecker.checkForUpdatesIfNeeded()
         }
+    }
+
+    /// Checks for app updates the first time the panel is opened.
+    ///
+    /// Use this method to trigger a one-time update check when the menu bar panel
+    /// becomes visible for the first time in a release build.
+    /// - Note: This does nothing in `DEBUG` builds.
+    func checkForUpdatesOnFirstPanelOpen() async {
+        #if DEBUG
+        return
+        #else
+        guard !hasRequestedFirstPanelUpdateCheck else { return }
+        hasRequestedFirstPanelUpdateCheck = true
+        await updateChecker.checkForUpdates()
+        #endif
     }
 
     private func migrateMediaSourceIfNeeded() {

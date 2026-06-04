@@ -20,14 +20,14 @@ struct SettingsView: View {
         VStack(spacing: 12) {
             settingsHeader
 
+            updatesSettingsContent
+
             VStack(alignment: .leading, spacing: 16) {
                 if isLocalSource {
                     localSettingsContent
                 } else {
                     serverSettingsContent
                 }
-
-                updatesSettingsContent
 
                 Button {
                     onSignOut()
@@ -120,15 +120,12 @@ struct SettingsView: View {
                     }
                 } label: {
                     HStack(spacing: 6) {
-                        if case .checking = updateChecker.state {
-                            ProgressView()
-                                .controlSize(.small)
-                        } else {
-                            Image(systemName: "arrow.triangle.2.circlepath")
-                                .font(.system(size: 11, weight: .semibold))
-                        }
-                        Text(updateCheckButtonTitle)
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                            .font(.system(size: 11, weight: .semibold))
+
+                        Text("Check for Updates")
                             .font(.system(size: 11, weight: .semibold, design: .rounded))
+                            .disabled(isCheckingForUpdates)
                     }
                     .padding(.horizontal, 8)
                     .padding(.vertical, 6)
@@ -142,30 +139,47 @@ struct SettingsView: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
 
-            if let updateStatusText {
+            if shouldShowUpdateDetails {
                 dividerRow
+                    .transition(.opacity)
                 VStack(alignment: .leading, spacing: 8) {
-                    Text(updateStatusText)
-                        .font(.system(size: 11, weight: .medium, design: .rounded))
-                        .foregroundStyle(updateStatusColor)
+                    HStack(alignment: .center, spacing: 8) {
+                        if isCheckingForUpdates {
+                            ProgressView()
+                                .controlSize(.small)
+                                .scaleEffect(0.72)
+                        }
+
+                        Text(updateStatusText ?? "Checking for updates...")
+                            .font(.system(size: 11, weight: .medium, design: .rounded))
+                            .foregroundStyle(updateStatusColor)
+                            .padding(.vertical, 1.5)
+                    }
 
                     if let release = downloadableRelease {
                         Button {
                             NSWorkspace.shared.open(release.downloadURL)
                         } label: {
-                            Label("Download \(release.tag)", systemImage: "arrow.down.circle")
+                            Label("Download", systemImage: "arrow.down.circle")
                                 .font(.system(size: 11, weight: .semibold, design: .rounded))
                         }
+                        .frame(maxWidth: .infinity, alignment: .trailing)
                         .buttonStyle(.plain)
                         .focusable(false)
-                        .interactiveCursor()
-                        .foregroundStyle(AppTheme.accent)
+                        .interactiveCursor(disabled: isCheckingForUpdates)
+                        .foregroundStyle(isCheckingForUpdates ? Color.secondary.opacity(0.65) : AppTheme.accent)
+                        .disabled(isCheckingForUpdates)
+                        .transition(.opacity.combined(with: .move(edge: .top)))
                     }
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
+        .animation(.easeInOut(duration: 0.22), value: shouldShowUpdateDetails)
+        .animation(.easeInOut(duration: 0.18), value: updateDetailsAnimationKey)
     }
 
     @ViewBuilder
@@ -375,23 +389,26 @@ struct SettingsView: View {
         return false
     }
 
-    private var updateCheckButtonTitle: String {
-        isCheckingForUpdates ? "Checking..." : "Check for Updates"
-    }
-
     private var downloadableRelease: ReleaseManifest? {
         switch updateChecker.state {
         case let .updateAvailable(release), let .informational(release):
             return release
-        case .idle, .checking, .upToDate, .failed:
+        case .checking:
+            return updateChecker.retainedDownloadableRelease
+        case .idle, .upToDate, .failed:
             return nil
         }
     }
 
     private var updateStatusText: String? {
         switch updateChecker.state {
-        case .idle, .checking:
+        case .idle:
             return nil
+        case .checking:
+            if let release = updateChecker.retainedDownloadableRelease {
+                return "Checking for updates. Latest known release is \(release.tag)."
+            }
+            return "Checking for updates..."
         case let .upToDate(release):
             return "You're up to date with \(release.tag), released \(release.releaseDate)."
         case let .updateAvailable(release):
@@ -407,10 +424,29 @@ struct SettingsView: View {
         switch updateChecker.state {
         case .failed:
             return .yellow
-        case .updateAvailable, .informational:
-            return AppTheme.accent
-        case .idle, .checking, .upToDate:
+        case .updateAvailable, .informational, .idle, .checking, .upToDate:
             return .secondary.opacity(0.78)
+        }
+    }
+
+    private var shouldShowUpdateDetails: Bool {
+        isCheckingForUpdates || updateStatusText != nil || downloadableRelease != nil
+    }
+
+    private var updateDetailsAnimationKey: String {
+        switch updateChecker.state {
+        case .idle:
+            return "idle"
+        case .checking:
+            return "checking-\(downloadableRelease?.tag ?? "none")"
+        case let .upToDate(release):
+            return "upToDate-\(release.tag)"
+        case let .updateAvailable(release):
+            return "updateAvailable-\(release.tag)"
+        case let .informational(release):
+            return "informational-\(release.tag)"
+        case let .failed(message):
+            return "failed-\(message)"
         }
     }
 

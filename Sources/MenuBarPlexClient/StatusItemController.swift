@@ -328,6 +328,10 @@ final class StatusItemController: NSObject {
         panel.makeKeyAndOrderFront(nil)
 
         Task { @MainActor in
+            await appState.checkForUpdatesOnFirstPanelOpen()
+        }
+
+        Task { @MainActor in
             await Task.yield()
             await NSAnimationContext.runAnimationGroup { context in
                 context.duration = StatusBarConfig.panelAnimationDuration
@@ -551,5 +555,7 @@ extension StatusItemController: NSMenuDelegate {
                 item.image = NSImage(systemSymbolName: "radio.fill", accessibilityDescription: nil)
             }
         }
+        menu.addItem(.separator())
+        menu.addItem(withTitle: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "").target = NSApp
     }
 }
