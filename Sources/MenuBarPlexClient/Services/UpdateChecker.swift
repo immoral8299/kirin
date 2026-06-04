@@ -115,7 +115,8 @@ final class UpdateChecker: ObservableObject {
     }
 
     private func resolveUpdateState() async throws -> UpdateCheckState {
-        let (data, response) = try await session.data(from: manifestURL)
+        let request = freshManifestRequest()
+        let (data, response) = try await session.data(for: request)
         if let httpResponse = response as? HTTPURLResponse,
            !(200...299).contains(httpResponse.statusCode) {
             return .failed("Update check failed with HTTP \(httpResponse.statusCode).")
@@ -132,6 +133,30 @@ final class UpdateChecker: ObservableObject {
         } else {
             return .upToDate(manifest)
         }
+    }
+
+    private func freshManifestRequest() -> URLRequest {
+        let requestURL = cacheBustedManifestURL()
+        var request = URLRequest(
+            url: requestURL,
+            cachePolicy: .reloadIgnoringLocalAndRemoteCacheData,
+            timeoutInterval: 30
+        )
+        request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
+        request.setValue("no-cache", forHTTPHeaderField: "Pragma")
+        return request
+    }
+
+    private func cacheBustedManifestURL() -> URL {
+        guard var components = URLComponents(url: manifestURL, resolvingAgainstBaseURL: false) else {
+            return manifestURL
+        }
+
+        var queryItems = components.queryItems ?? []
+        queryItems.removeAll { $0.name == "check" }
+        queryItems.append(URLQueryItem(name: "check", value: String(Int(Date().timeIntervalSince1970))))
+        components.queryItems = queryItems
+        return components.url ?? manifestURL
     }
 
     static func compareVersions(_ lhs: String, _ rhs: String) -> ComparisonResult {
@@ -153,11 +178,8 @@ final class UpdateChecker: ObservableObject {
     private static func versionParts(_ version: String) -> [Int] {
         version
             .trimmingLeadingVersionPrefix()
-            .split(separator: ".")
-            .map { part in
-                let numericPrefix = part.prefix { $0.isNumber }
-                return Int(numericPrefix) ?? 0
-            }
+            .split { !$0.isNumber }
+            .compactMap { Int($0) }
     }
 
     private var shouldRunAutomaticCheck: Bool {
