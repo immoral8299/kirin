@@ -6,19 +6,11 @@ import SwiftUI
 fileprivate enum StatusBarConfig {
     static let fallbackIconName = PlaybackStateIcon.statusSystemImageName(for: .buffering)
     static let fallbackText = "Initializing..."
-    static let horizontalPadding: CGFloat = 12
-    static let iconWidth: CGFloat = 12
-    static let iconTextGap: CGFloat = 8
-    static let textContentPadding: CGFloat = 8
     static let topRightScreenMargin = NSSize(width: 4, height: 4)
     static let panelSize = NSSize(width: 460, height: 520)
     static let iconFontSize: CGFloat = 11
     static let marqueeFontSize: CGFloat = 13
-    static let marqueeMinVisibleWidth: CGFloat = 24
-    static let marqueeHorizontalTextPadding: CGFloat = 2
-    static let marqueeHeight: CGFloat = 16
-    static let stackViewSpacing: CGFloat = 8
-    static let buttonHorizontalMargin: CGFloat = 6
+    static let iconTitleSpacing = "  "
     static let panelAnimationDuration: TimeInterval = 0.16
     static let panelAnimationOffset: CGFloat = 10
 }
@@ -27,9 +19,6 @@ fileprivate enum StatusBarConfig {
 final class StatusItemController: NSObject {
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let appState: AppState
-    private let iconView = NSImageView(frame: .zero)
-    private let marqueeView = StatusMarqueeView(frame: .zero)
-    private let stackView = NSStackView(frame: .zero)
     private let panelContainerView: NSView
     private let panelContentView = NSView(frame: .zero)
     private var rootView: NSHostingView<MenuBarRootView>!
@@ -39,6 +28,9 @@ final class StatusItemController: NSObject {
     private var isPanelPinned = false
     private var isPanelHiding = false
     private var hasRenderedResolvedStatus = false
+    private var currentStatusIconName = ""
+    private var currentStatusText = ""
+    private var currentThemePreference: AppThemePreference?
 
     private let panelState = PanelState()
 
@@ -139,48 +131,22 @@ final class StatusItemController: NSObject {
     private func configureButton() {
         guard let statusButton = statusItem.button else { return }
 
-        statusButton.title = ""
-        statusButton.image = nil
+        statusItem.length = NSStatusItem.variableLength
+        statusButton.font = NSFont.systemFont(ofSize: StatusBarConfig.marqueeFontSize, weight: .regular)
+        statusButton.imagePosition = .imageLeading
+        statusButton.imageHugsTitle = true
+        statusButton.title = statusTitle(StatusBarConfig.fallbackText)
+        statusButton.image = statusImage(named: StatusBarConfig.fallbackIconName)
+        statusButton.contentTintColor = nil
         statusButton.action = #selector(togglePopover(_:))
         statusButton.target = self
         statusButton.sendAction(on: [.leftMouseUp])
         statusButton.addCursorRect(statusButton.bounds, cursor: .pointingHand)
-
-        iconView.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: StatusBarConfig.iconFontSize, weight: .medium)
-        iconView.contentTintColor = .labelColor
-        iconView.translatesAutoresizingMaskIntoConstraints = false
-        iconView.setContentHuggingPriority(.required, for: .horizontal)
-        iconView.setContentCompressionResistancePriority(.required, for: .horizontal)
-
-        marqueeView.translatesAutoresizingMaskIntoConstraints = false
-        marqueeView.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        marqueeView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-
-        stackView.orientation = .horizontal
-        stackView.alignment = .centerY
-        stackView.spacing = StatusBarConfig.stackViewSpacing
-        stackView.translatesAutoresizingMaskIntoConstraints = false
-        stackView.addArrangedSubview(iconView)
-        stackView.addArrangedSubview(marqueeView)
-
-        statusButton.addSubview(stackView)
-
-        NSLayoutConstraint.activate([
-            stackView.leadingAnchor.constraint(equalTo: statusButton.leadingAnchor, constant: StatusBarConfig.buttonHorizontalMargin),
-            stackView.trailingAnchor.constraint(equalTo: statusButton.trailingAnchor, constant: -StatusBarConfig.buttonHorizontalMargin),
-            stackView.centerYAnchor.constraint(equalTo: statusButton.centerYAnchor),
-
-            iconView.widthAnchor.constraint(equalToConstant: StatusBarConfig.iconWidth),
-            iconView.heightAnchor.constraint(equalToConstant: StatusBarConfig.iconWidth),
-            marqueeView.heightAnchor.constraint(equalToConstant: StatusBarConfig.marqueeHeight),
-            marqueeView.widthAnchor.constraint(greaterThanOrEqualToConstant: StatusBarConfig.marqueeMinVisibleWidth),
-        ])
     }
 
     private func configureContextMenu() {
         let menu = PlexStatusMenu()
         menu.delegate = self
-        marqueeView.menu = menu
     }
 
     private func configureOutsideClickMonitoring() {
@@ -226,6 +192,9 @@ final class StatusItemController: NSObject {
     }
 
     private func applyThemePreference(_ preference: AppThemePreference) {
+        guard currentThemePreference != preference else { return }
+        currentThemePreference = preference
+
         let appearance: NSAppearance?
         switch preference {
         case .system:
@@ -252,16 +221,39 @@ final class StatusItemController: NSObject {
             return
         }
 
-        iconView.image = NSImage(systemSymbolName: resolvedIconName, accessibilityDescription: nil)
-        marqueeView.text = resolvedText
-        updateStatusItemLength()
+        guard resolvedIconName != currentStatusIconName || resolvedText != currentStatusText else { return }
+
+        currentStatusIconName = resolvedIconName
+        currentStatusText = resolvedText
+        applyStatusButton(iconName: resolvedIconName, text: resolvedText)
         hasRenderedResolvedStatus = true
     }
 
     private func applyFallbackStatus() {
-        iconView.image = NSImage(systemSymbolName: StatusBarConfig.fallbackIconName, accessibilityDescription: nil)
-        marqueeView.text = StatusBarConfig.fallbackText
-        updateStatusItemLength()
+        currentStatusIconName = StatusBarConfig.fallbackIconName
+        currentStatusText = StatusBarConfig.fallbackText
+        applyStatusButton(iconName: StatusBarConfig.fallbackIconName, text: StatusBarConfig.fallbackText)
+    }
+
+    private func applyStatusButton(iconName: String, text: String) {
+        guard let statusButton = statusItem.button else { return }
+
+        statusItem.length = NSStatusItem.variableLength
+        statusButton.image = statusImage(named: iconName)
+        statusButton.title = statusTitle(text)
+    }
+
+    private func statusImage(named iconName: String) -> NSImage? {
+        let configuration = NSImage.SymbolConfiguration(pointSize: StatusBarConfig.iconFontSize, weight: .medium)
+        let image = NSImage(systemSymbolName: iconName, accessibilityDescription: nil)?
+            .withSymbolConfiguration(configuration)
+
+        image?.isTemplate = true
+        return image
+    }
+
+    private func statusTitle(_ text: String) -> String {
+        StatusBarConfig.iconTitleSpacing + text
     }
 
     private func resolvedStatusText(from text: String) -> String {
@@ -366,12 +358,6 @@ final class StatusItemController: NSObject {
         }
     }
 
-    private func updateStatusItemLength() {
-        let targetLength = StatusBarConfig.horizontalPadding + StatusBarConfig.iconWidth + StatusBarConfig.iconTextGap + marqueeView.visibleWidth + StatusBarConfig.textContentPadding
-
-        statusItem.length = targetLength
-    }
-
     private func positionPanel() {
         panel.setFrame(panelTargetFrame(), display: true)
     }
@@ -436,69 +422,6 @@ private final class MenuBarPanel: NSPanel {
 
     override var canBecomeMain: Bool {
         true
-    }
-}
-
-final class StatusMarqueeView: NSView {
-    var text: String = "" {
-        didSet {
-            guard text != oldValue else { return }
-            textLabel.stringValue = text
-            needsLayout = true
-            invalidateIntrinsicContentSize()
-        }
-    }
-
-    private let font = NSFont.systemFont(ofSize: StatusBarConfig.marqueeFontSize, weight: .regular)
-    private let horizontalTextPadding = StatusBarConfig.marqueeHorizontalTextPadding
-    private let textLabel = NSTextField(labelWithString: "")
-
-    var visibleWidth: CGFloat {
-        max(StatusBarConfig.marqueeMinVisibleWidth, textWidth + horizontalTextPadding)
-    }
-
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        wantsLayer = true
-        layer?.masksToBounds = true
-
-        textLabel.font = font
-        textLabel.textColor = .labelColor
-        textLabel.backgroundColor = .clear
-        textLabel.lineBreakMode = .byTruncatingTail
-        textLabel.translatesAutoresizingMaskIntoConstraints = true
-        textLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        textLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        addSubview(textLabel)
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) {
-        nil
-    }
-
-    override func layout() {
-        super.layout()
-
-        textLabel.frame = NSRect(
-            x: horizontalTextPadding,
-            y: verticallyCenteredY(for: textLabel),
-            width: max(0, bounds.width - (horizontalTextPadding * 2)),
-            height: textLabel.fittingSize.height
-        )
-    }
-
-    override var intrinsicContentSize: NSSize {
-        NSSize(width: NSView.noIntrinsicMetric, height: 16)
-    }
-
-    private var textWidth: CGFloat {
-        let attributes: [NSAttributedString.Key: Any] = [.font: font]
-        return ceil((text as NSString).size(withAttributes: attributes).width)
-    }
-
-    private func verticallyCenteredY(for label: NSTextField) -> CGFloat {
-        floor((bounds.height - label.fittingSize.height) / 2)
     }
 }
 

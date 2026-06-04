@@ -155,14 +155,18 @@ private actor ArtworkThumbnailStore {
     private let fileManager = FileManager.default
     private let diskCacheDirectory: URL
     private let thumbnailMaxPixelSize: Int
+    private let staleThumbnailAge: TimeInterval = 30 * 24 * 60 * 60 // 30 days
     private var inFlightRequests: [URL: Task<Data?, Never>] = [:]
 
     init(diskCacheDirectory: URL, thumbnailMaxPixelSize: Int) {
         self.diskCacheDirectory = diskCacheDirectory
         self.thumbnailMaxPixelSize = thumbnailMaxPixelSize
 
-        try? fileManager.removeItem(at: diskCacheDirectory)
         try? fileManager.createDirectory(at: diskCacheDirectory, withIntermediateDirectories: true)
+        Self.cleanUpStaleThumbnails(
+            in: diskCacheDirectory,
+            staleThumbnailAge: staleThumbnailAge
+        )
     }
 
     func thumbnailData(for url: URL) async -> Data? {
@@ -210,7 +214,10 @@ private actor ArtworkThumbnailStore {
                 return nil
             }
 
-            try? thumbnailData.write(to: fileURL, options: .atomic)
+            Task.detached(priority: .utility) {
+                try? thumbnailData.write(to: fileURL, options: .atomic)
+            }
+
             return thumbnailData
         } catch {
             return nil
@@ -238,5 +245,25 @@ private actor ArtworkThumbnailStore {
 
         let representation = NSBitmapImageRep(cgImage: thumbnail)
         return representation.representation(using: .png, properties: [:])
+    }
+
+    private static func cleanUpStaleThumbnails(in diskCacheDirectory: URL, staleThumbnailAge: TimeInterval) {
+        Task.detached(priority: .utility) {
+            let fileManager = FileManager.default
+            let cutoffDate = Date().addingTimeInterval(-staleThumbnailAge)
+            guard let fileURLs = try? fileManager.contentsOfDirectory(
+                at: diskCacheDirectory,
+                includingPropertiesForKeys: [.contentModificationDateKey],
+                options: [.skipsHiddenFiles]
+            ) else { return }
+
+            for fileURL in fileURLs {
+                guard !Task.isCancelled else { return }
+                let resourceValues = try? fileURL.resourceValues(forKeys: [.contentModificationDateKey])
+                guard let modificationDate = resourceValues?.contentModificationDate,
+                      modificationDate < cutoffDate else { continue }
+                try? fileManager.removeItem(at: fileURL)
+            }
+        }
     }
 }
