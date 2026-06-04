@@ -4,6 +4,7 @@ struct SettingsView: View {
     @ObservedObject var authService: PlexAuthService
     @ObservedObject var settingsStore: SettingsStore
     @ObservedObject var libraryStore: LibraryStore
+    @ObservedObject var updateChecker: UpdateChecker
     let onSelectServer: (String) -> Void
     let onSelectLibrary: (String) -> Void
     let onRefreshServersAndLibraries: () -> Void
@@ -25,6 +26,8 @@ struct SettingsView: View {
                 } else {
                     serverSettingsContent
                 }
+
+                updatesSettingsContent
 
                 Button {
                     onSignOut()
@@ -92,6 +95,80 @@ struct SettingsView: View {
     }
 
     @ViewBuilder
+    private var updatesSettingsContent: some View {
+        settingsSection("Updates") {
+            HStack(alignment: .top, spacing: 10) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Current Version")
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .foregroundStyle(.primary)
+                    Text(updateChecker.currentVersionDisplay)
+                        .font(.system(size: 11, weight: .medium, design: .rounded))
+                        .foregroundStyle(.secondary.opacity(0.78))
+                    if let lastUpdateCheckText {
+                        Text(lastUpdateCheckText)
+                            .font(.system(size: 10, weight: .medium, design: .rounded))
+                            .foregroundStyle(.secondary.opacity(0.62))
+                    }
+                }
+
+                Spacer()
+
+                Button {
+                    Task {
+                        await updateChecker.checkForUpdates()
+                    }
+                } label: {
+                    HStack(spacing: 6) {
+                        if case .checking = updateChecker.state {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Image(systemName: "arrow.triangle.2.circlepath")
+                                .font(.system(size: 11, weight: .semibold))
+                        }
+                        Text(updateCheckButtonTitle)
+                            .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 6)
+                    .background(AppTheme.overlayMedium, in: RoundedRectangle(cornerRadius: AppCornerRadius.compact, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .focusable(false)
+                .interactiveCursor(disabled: isCheckingForUpdates)
+                .disabled(isCheckingForUpdates)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+
+            if let updateStatusText {
+                dividerRow
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(updateStatusText)
+                        .font(.system(size: 11, weight: .medium, design: .rounded))
+                        .foregroundStyle(updateStatusColor)
+
+                    if let release = downloadableRelease {
+                        Button {
+                            NSWorkspace.shared.open(release.downloadURL)
+                        } label: {
+                            Label("Download \(release.tag)", systemImage: "arrow.down.circle")
+                                .font(.system(size: 11, weight: .semibold, design: .rounded))
+                        }
+                        .buttonStyle(.plain)
+                        .focusable(false)
+                        .interactiveCursor()
+                        .foregroundStyle(AppTheme.accent)
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+            }
+        }
+    }
+
+    @ViewBuilder
     private var serverSettingsContent: some View {
         if isPlexSource {
             settingsSection("Library") {
@@ -135,7 +212,8 @@ struct SettingsView: View {
     private var settingsHeader: some View {
         HStack {
             Text("Settings")
-                .font(.system(size: 12, weight: .bold, design: .rounded))
+                .font(.system(size: 14, weight: .bold, design: .rounded))
+                .foregroundStyle(AppTheme.accent)
 
             Spacer()
 
@@ -288,6 +366,57 @@ struct SettingsView: View {
 
     private var listenedThresholdOptions: [(String, Int)] {
         stride(from: 50, through: 100, by: 5).map { ("\($0)%", $0) }
+    }
+
+    private var isCheckingForUpdates: Bool {
+        if case .checking = updateChecker.state {
+            return true
+        }
+        return false
+    }
+
+    private var updateCheckButtonTitle: String {
+        isCheckingForUpdates ? "Checking..." : "Check for Updates"
+    }
+
+    private var downloadableRelease: ReleaseManifest? {
+        switch updateChecker.state {
+        case let .updateAvailable(release), let .informational(release):
+            return release
+        case .idle, .checking, .upToDate, .failed:
+            return nil
+        }
+    }
+
+    private var updateStatusText: String? {
+        switch updateChecker.state {
+        case .idle, .checking:
+            return nil
+        case let .upToDate(release):
+            return "You're up to date with \(release.tag), released \(release.releaseDate)."
+        case let .updateAvailable(release):
+            return "Version \(release.tag) is available, released \(release.releaseDate)."
+        case let .informational(release):
+            return "Latest release is \(release.tag), released \(release.releaseDate)."
+        case let .failed(message):
+            return message
+        }
+    }
+
+    private var updateStatusColor: Color {
+        switch updateChecker.state {
+        case .failed:
+            return .yellow
+        case .updateAvailable, .informational:
+            return AppTheme.accent
+        case .idle, .checking, .upToDate:
+            return .secondary.opacity(0.78)
+        }
+    }
+
+    private var lastUpdateCheckText: String? {
+        guard let lastCheckDate = updateChecker.lastCheckDate else { return nil }
+        return "Last checked \(lastCheckDate.formatted(date: .abbreviated, time: .shortened))"
     }
 
     @ViewBuilder

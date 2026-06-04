@@ -79,10 +79,13 @@ jobs:
         run: |
           if [[ "${GITHUB_REF_TYPE}" == "tag" && "${GITHUB_REF_NAME}" == v* ]]; then
             version="${GITHUB_REF_NAME#v}"
+            tag="${GITHUB_REF_NAME}"
           else
             version="0.1.${GITHUB_RUN_NUMBER}"
+            tag="v${version}"
           fi
           echo "version=${version}" >> "${GITHUB_OUTPUT}"
+          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
 
       - name: Build DMG
         env:
@@ -104,10 +107,26 @@ jobs:
 
       - name: Prepare GitHub Pages site
         shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ steps.version.outputs.tag }}
+          PAGE_URL: https://immoral8299.github.io/kirin/
+          DOWNLOAD_URL: https://immoral8299.github.io/kirin/downloads/Kirin.dmg
         run: |
+          release_date="$(date -u +%F)"
           mkdir -p public/downloads
           cp dist/Kirin.dmg public/downloads/Kirin.dmg
-          cat > public/index.html <<'HTML'
+          cat > public/release.json <<JSON
+          {
+            "appName": "Kirin",
+            "version": "${VERSION}",
+            "tag": "${TAG}",
+            "releaseDate": "${release_date}",
+            "downloadURL": "${DOWNLOAD_URL}",
+            "pageURL": "${PAGE_URL}"
+          }
+          JSON
+          cat > public/index.html <<HTML
           <!doctype html>
           <html lang="en">
           <head>
@@ -122,14 +141,19 @@ jobs:
               p { color: color-mix(in srgb, CanvasText 72%, transparent); line-height: 1.5; }
               a.button { display: inline-block; margin-top: 16px; padding: 12px 18px; border-radius: 10px; background: #6c63a6; color: white; text-decoration: none; font-weight: 700; }
               .meta { margin-top: 18px; font-size: 13px; }
+              .release { margin: 12px 0 0; font-size: 14px; font-weight: 700; color: CanvasText; }
             </style>
           </head>
           <body>
             <main>
               <h1>Kirin</h1>
               <p>Download the latest macOS DMG build.</p>
+              <p class="release">${TAG} &middot; Released ${release_date}</p>
               <a class="button" href="./downloads/Kirin.dmg">Download Kirin</a>
-              <p class="meta">To bypass gatekeeper, run <code>sudo xattr -r -d com.apple.quarantine /Applications/Kirin.app</code>.</p>
+              <p class="meta">To bypass gatekeeper, run</p>
+              <pre class="meta">
+                <code>sudo xattr -r -d com.apple.quarantine /Applications/Kirin.app</code>
+              </pre>
             </main>
           </body>
           </html>

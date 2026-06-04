@@ -29,6 +29,7 @@ struct MenuBarRootView: View {
     @ObservedObject var panelState: PanelState
     @ObservedObject private var authService: PlexAuthService
     @ObservedObject private var settingsStore: SettingsStore
+    @ObservedObject private var updateChecker: UpdateChecker
     @State private var selectedTab: ContentTab
 
     init(
@@ -45,6 +46,7 @@ struct MenuBarRootView: View {
         self.onPanelPositionChange = onPanelPositionChange
         _authService = ObservedObject(wrappedValue: appState.authService)
         _settingsStore = ObservedObject(wrappedValue: appState.settingsStore)
+        _updateChecker = ObservedObject(wrappedValue: appState.updateChecker)
         _selectedTab = State(initialValue: appState.isLocalMode ? .queue : .home)
     }
 
@@ -165,6 +167,14 @@ struct MenuBarRootView: View {
                 .padding(6)
                 .contentShape(Rectangle())
                 .background(selectedTab == tab ? AppTheme.overlayStrong : .clear, in: RoundedRectangle(cornerRadius: AppCornerRadius.compact, style: .continuous))
+                .overlay(alignment: .topTrailing) {
+                    if tab == .settings && updateChecker.hasUpdateAvailable {
+                        Circle()
+                            .fill(.red)
+                            .frame(width: 7, height: 7)
+                            .offset(x: -3, y: 3)
+                    }
+                }
         }
         .buttonStyle(.plain)
         .focusable(false)
@@ -216,6 +226,7 @@ private struct AuthenticatedContent: View {
                     authService: appState.authService,
                     settingsStore: appState.settingsStore,
                     libraryStore: libraryStore,
+                    updateChecker: appState.updateChecker,
                     onSelectServer: appState.selectServer,
                     onSelectLibrary: appState.selectLibrary,
                     onRefreshServersAndLibraries: appState.refreshServersAndLibraries,
@@ -243,6 +254,7 @@ private struct AuthenticatedContent: View {
                     authService: appState.authService,
                     settingsStore: appState.settingsStore,
                     libraryStore: libraryStore,
+                    updateChecker: appState.updateChecker,
                     onSelectServer: appState.selectServer,
                     onSelectLibrary: appState.selectLibrary,
                     onRefreshServersAndLibraries: appState.refreshServersAndLibraries,

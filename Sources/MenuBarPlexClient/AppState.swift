@@ -5,6 +5,7 @@ import Foundation
 @MainActor
 final class AppState {
     let settingsStore = SettingsStore()
+    let updateChecker = UpdateChecker()
     let authService: PlexAuthService
 
     let libraryStore: LibraryStore
@@ -118,6 +119,10 @@ final class AppState {
             }
         default:
             break
+        }
+
+        Task {
+            await updateChecker.checkForUpdatesIfNeeded()
         }
     }
 
