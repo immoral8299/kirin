@@ -28,7 +28,9 @@ jobs:
         id: swift-toolchain-cache
         uses: actions/cache/restore@v4
         with:
-          path: /Library/Developer/Toolchains/swift-${{ env.SWIFT_VERSION }}*.xctoolchain
+          path: |
+            ~/.swiftly
+            ~/Library/Developer/Toolchains/swift-${{ env.SWIFT_VERSION }}*.xctoolchain
           key: swift-toolchain-${{ runner.os }}-${{ runner.arch }}-${{ env.SWIFT_VERSION }}
 
       - uses: swift-actions/setup-swift@v3
@@ -39,39 +41,22 @@ jobs:
         if: steps.swift-toolchain-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
-          path: /Library/Developer/Toolchains/swift-${{ env.SWIFT_VERSION }}*.xctoolchain
+          path: |
+            ~/.swiftly
+            ~/Library/Developer/Toolchains/swift-${{ env.SWIFT_VERSION }}*.xctoolchain
           key: ${{ steps.swift-toolchain-cache.outputs.cache-primary-key }}
 
-      - name: Resolve Homebrew cache path
-        id: homebrew-cache
-        shell: bash
-        run: echo "path=$(brew --cache)" >> "${GITHUB_OUTPUT}"
-
-      - name: Restore Homebrew vips bottles
-        id: homebrew-vips-cache
-        uses: actions/cache/restore@v4
-        with:
-          path: ${{ steps.homebrew-cache.outputs.path }}
-          key: homebrew-vips-${{ runner.os }}-${{ runner.arch }}-v1
-
       - name: Install release dependencies
-        run: brew install vips
-
-      - name: Save Homebrew vips bottles
-        if: steps.homebrew-vips-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: ${{ steps.homebrew-cache.outputs.path }}
-          key: ${{ steps.homebrew-vips-cache.outputs.cache-primary-key }}
+        run: brew list vips >/dev/null 2>&1 || brew install vips
 
       - name: Restore Swift build products
         id: swift-build-cache
         uses: actions/cache/restore@v4
         with:
           path: .build
-          key: swift-build-${{ runner.arch }}-${{ hashFiles('Package.swift', 'Package.resolved', 'Sources/**/*.swift', 'Tests/**/*.swift') }}
+          key: swift-build-${{ runner.os }}-${{ runner.arch }}-${{ env.SWIFT_VERSION }}-${{ github.sha }}
           restore-keys: |
-            swift-build-${{ runner.arch }}-
+            swift-build-${{ runner.os }}-${{ runner.arch }}-${{ env.SWIFT_VERSION }}-
 
       - name: Resolve version
         id: version
