@@ -97,26 +97,32 @@ struct SettingsView: View {
                 Spacer()
 
                 Button {
-                    Task {
-                        await updateChecker.checkForUpdates()
+                    if let release = downloadableRelease {
+                        NSWorkspace.shared.open(release.downloadURL)
+                    } else {
+                        Task {
+                            await updateChecker.checkForUpdates()
+                        }
                     }
                 } label: {
+                    let hasDownloadableRelease = downloadableRelease != nil
+
                     HStack(spacing: 6) {
-                        Image(systemName: "arrow.triangle.2.circlepath")
+                        Image(systemName: hasDownloadableRelease ? "arrow.down.circle.fill" : "arrow.triangle.2.circlepath")
                             .font(.system(size: 11, weight: .semibold))
 
-                        Text("Check for Updates")
+                        Text(hasDownloadableRelease ? "Download" : "Check for Updates")
                             .font(.system(size: 11, weight: .semibold, design: .rounded))
-                            .disabled(isCheckingForUpdates)
                     }
                     .padding(.horizontal, 8)
                     .padding(.vertical, 6)
-                    .background(AppTheme.overlayMedium, in: RoundedRectangle(cornerRadius: AppCornerRadius.compact, style: .continuous))
+                    .foregroundStyle(hasDownloadableRelease ? AppTheme.onAccent : Color.primary)
+                    .background(hasDownloadableRelease ? AppTheme.accent : AppTheme.overlayMedium, in: RoundedRectangle(cornerRadius: AppCornerRadius.compact, style: .continuous))
                 }
                 .buttonStyle(.plain)
                 .focusable(false)
-                .interactiveCursor(disabled: isCheckingForUpdates)
-                .disabled(isCheckingForUpdates)
+                .interactiveCursor(disabled: isCheckingForUpdates && downloadableRelease == nil)
+                .disabled(isCheckingForUpdates && downloadableRelease == nil)
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
@@ -138,21 +144,6 @@ struct SettingsView: View {
                             .padding(.vertical, 1.5)
                     }
 
-                    if let release = downloadableRelease {
-                        Button {
-                            NSWorkspace.shared.open(release.downloadURL)
-                        } label: {
-                            Label("Download", systemImage: "arrow.down.circle")
-                                .font(.system(size: 11, weight: .semibold, design: .rounded))
-                        }
-                        .frame(maxWidth: .infinity, alignment: .trailing)
-                        .buttonStyle(.plain)
-                        .focusable(false)
-                        .interactiveCursor(disabled: isCheckingForUpdates)
-                        .foregroundStyle(isCheckingForUpdates ? Color.secondary.opacity(0.65) : AppTheme.accent)
-                        .disabled(isCheckingForUpdates)
-                        .transition(.opacity.combined(with: .move(edge: .top)))
-                    }
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 10)
