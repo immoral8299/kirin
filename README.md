@@ -6,31 +6,31 @@ Kirin is a macOS 13+ menu bar music client for Plex, Navidrome, and local files.
 
 ### Menu bar popup with Plex home content and now-playing card
 
-![Kirin menu bar popup](demo/kirin-screen-corner.png)
+![Kirin menu bar popup](demo/kirin-screen-corner.png){height=240}
 
 ### Plex home content with recently played and recently added sections
 
-![Kirin Plex home content](demo/kirin-plex-home.png)
+![Kirin Plex home content](demo/kirin-plex-home.png){height=240}
 
 ### Play queue view
 
-![Kirin play queue](demo/kirin-queue.png)
+![Kirin play queue](demo/kirin-play-queue.png){height=240}
 
 ### Navidrome connection flow
 
-![Kirin Navidrome connection flow](demo/kirin-navidrome-login.png)
+![Kirin Navidrome connection flow](demo/kirin-navidrome-login.png){height=240}
 
 ### Local file mode
 
-![Kirin local file mode](demo/kirin-local-files-mode.png)
+![Kirin local file mode](demo/kirin-local-files-mode.png){height=240}
 
 ### Search view
 
-![Kirin search view](demo/kirin-search-mode.png)
+![Kirin search view](demo/kirin-search-mode.png){height=240}
 
 ### Settings
 
-![Kirin settings view](demo/kirin-settings.png)
+![Kirin settings view](demo/kirin-settings.png){height=240}
 
 
 <!-- Add screenshots or short captures to `demo/` as the app evolves.
