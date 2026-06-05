@@ -655,4 +655,21 @@ extension AppState: PlaybackEngineDelegate {
     func playbackEngine(_ engine: PlaybackEngine, didTransitionTo state: PlaybackState) {
         timelineTracker.playbackStateDidChange(to: state)
     }
+
+    func playbackEngineDidRequestTogglePlayback(_ engine: PlaybackEngine) {
+        togglePlayback()
+    }
+
+    func playbackEngineDidRequestNextTrack(_ engine: PlaybackEngine) {
+        nextTrack()
+    }
+
+    func playbackEngineDidRequestPreviousTrack(_ engine: PlaybackEngine) {
+        previousTrack()
+    }
+
+    func playbackEngine(_ engine: PlaybackEngine, didRequestSeekTo position: Double) {
+        guard playbackDuration > 0 else { return }
+        seekToProgress(position / playbackDuration)
+    }
 }

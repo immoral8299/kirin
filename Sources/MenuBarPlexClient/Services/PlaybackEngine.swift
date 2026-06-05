@@ -1,12 +1,18 @@
 import AVFoundation
+import AppKit
 import Combine
 import Foundation
+import MediaPlayer
 
 @MainActor
 protocol PlaybackEngineDelegate: AnyObject {
     func playbackEngineDidEndCurrentTrack(_ engine: PlaybackEngine)
     func playbackEngine(_ engine: PlaybackEngine, didUpdatePosition position: Double, duration: Double)
     func playbackEngine(_ engine: PlaybackEngine, didTransitionTo state: PlaybackState)
+    func playbackEngineDidRequestTogglePlayback(_ engine: PlaybackEngine)
+    func playbackEngineDidRequestNextTrack(_ engine: PlaybackEngine)
+    func playbackEngineDidRequestPreviousTrack(_ engine: PlaybackEngine)
+    func playbackEngine(_ engine: PlaybackEngine, didRequestSeekTo position: Double)
 }
 
 @MainActor
@@ -39,6 +45,10 @@ final class PlaybackEngine: ObservableObject {
     private var prebufferedTrackID: String?
     private var prebufferedItem: AVPlayerItem?
     private var prebufferTask: Task<Void, Never>?
+    private var remoteCommandTargets: [(command: MPRemoteCommand, target: Any)] = []
+    private var nowPlayingArtworkTask: Task<Void, Never>?
+    private var nowPlayingArtwork: MPMediaItemArtwork?
+    private var nowPlayingInfoTrackID: String?
     private let bufferingTransitionDelayNanoseconds: UInt64 = 1_500_000_000
     private let bufferingRetryDelayNanoseconds: UInt64 = 8_000_000_000
     private let maximumBufferingRetryCount = 3
@@ -47,6 +57,7 @@ final class PlaybackEngine: ObservableObject {
 
     init(context: StoreContext) {
         self.context = context
+        configureRemoteCommandCenter()
     }
 
     var currentTrack: MediaTrack? { _currentTrack }
@@ -72,10 +83,12 @@ final class PlaybackEngine: ObservableObject {
             cancelBufferingRetry()
             player.pause()
             transitionPlaybackState(to: .paused)
+            refreshNowPlayingInfo()
         case .paused, .stopped:
             isPlaybackRequested = true
             player.play()
             synchronizePlaybackState(with: player.timeControlStatus)
+            refreshNowPlayingInfo()
         }
     }
 
@@ -93,6 +106,7 @@ final class PlaybackEngine: ObservableObject {
                 guard let self, currentSeekID == self.seekID else { return }
                 self.playbackPosition = min(max(targetTime.seconds, 0), self.playbackDuration)
                 self.pendingSeekProgress = nil
+                self.refreshNowPlayingInfo()
             }
         }
     }
@@ -153,6 +167,7 @@ final class PlaybackEngine: ObservableObject {
         playbackState = .stopped
         playbackPosition = 0
         playbackDuration = 0
+        clearNowPlayingInfo()
     }
 
     func stopPlayback() {
@@ -167,6 +182,7 @@ final class PlaybackEngine: ObservableObject {
         bufferingRetryCount = 0
         player = nil
         clearPrebufferedTrack()
+        refreshNowPlayingInfo()
     }
 
     func clearCaches() {
@@ -226,6 +242,10 @@ final class PlaybackEngine: ObservableObject {
             trackNumber: track.trackNumber,
             discNumber: track.discNumber
         )
+        nowPlayingInfoTrackID = track.id
+        nowPlayingArtwork = nil
+        refreshNowPlayingInfo()
+        loadNowPlayingArtwork(from: track)
     }
 
     private func preparePlayer(for track: MediaTrack) async {
@@ -423,6 +443,7 @@ final class PlaybackEngine: ObservableObject {
                     self.playbackDuration = duration
                 }
 
+                self.refreshNowPlayingInfo()
                 self.delegate?.playbackEngine(self, didUpdatePosition: self.playbackPosition, duration: self.playbackDuration)
             }
         }
@@ -450,6 +471,7 @@ final class PlaybackEngine: ObservableObject {
         } else {
             playbackDuration = 0
         }
+        refreshNowPlayingInfo()
     }
 
     private func removeTimeObserver() {
@@ -612,7 +634,156 @@ final class PlaybackEngine: ObservableObject {
     private func transitionPlaybackState(to newState: PlaybackState) {
         guard playbackState != newState else { return }
         playbackState = newState
+        refreshNowPlayingInfo()
         delegate?.playbackEngine(self, didTransitionTo: newState)
+    }
+
+    private func configureRemoteCommandCenter() {
+        let commandCenter = MPRemoteCommandCenter.shared()
+
+        commandCenter.playCommand.isEnabled = true
+        commandCenter.pauseCommand.isEnabled = true
+        commandCenter.togglePlayPauseCommand.isEnabled = true
+        commandCenter.nextTrackCommand.isEnabled = true
+        commandCenter.previousTrackCommand.isEnabled = true
+        commandCenter.changePlaybackPositionCommand.isEnabled = true
+
+        remoteCommandTargets = [
+            (commandCenter.playCommand, commandCenter.playCommand.addTarget { [weak self] _ in
+                Task { @MainActor in
+                    guard let self, self.playbackState != .playing else { return }
+                    self.delegate?.playbackEngineDidRequestTogglePlayback(self)
+                }
+                return .success
+            }),
+            (commandCenter.pauseCommand, commandCenter.pauseCommand.addTarget { [weak self] _ in
+                Task { @MainActor in
+                    guard let self, self.playbackState == .playing || self.playbackState == .buffering else { return }
+                    self.delegate?.playbackEngineDidRequestTogglePlayback(self)
+                }
+                return .success
+            }),
+            (commandCenter.togglePlayPauseCommand, commandCenter.togglePlayPauseCommand.addTarget { [weak self] _ in
+                Task { @MainActor in
+                    guard let self else { return }
+                    self.delegate?.playbackEngineDidRequestTogglePlayback(self)
+                }
+                return .success
+            }),
+            (commandCenter.nextTrackCommand, commandCenter.nextTrackCommand.addTarget { [weak self] _ in
+                Task { @MainActor in
+                    guard let self else { return }
+                    self.delegate?.playbackEngineDidRequestNextTrack(self)
+                }
+                return .success
+            }),
+            (commandCenter.previousTrackCommand, commandCenter.previousTrackCommand.addTarget { [weak self] _ in
+                Task { @MainActor in
+                    guard let self else { return }
+                    self.delegate?.playbackEngineDidRequestPreviousTrack(self)
+                }
+                return .success
+            }),
+            (commandCenter.changePlaybackPositionCommand, commandCenter.changePlaybackPositionCommand.addTarget { [weak self] event in
+                guard let event = event as? MPChangePlaybackPositionCommandEvent else {
+                    return .commandFailed
+                }
+
+                Task { @MainActor in
+                    guard let self else { return }
+                    self.delegate?.playbackEngine(self, didRequestSeekTo: event.positionTime)
+                }
+                return .success
+            }),
+        ]
+    }
+
+    private func refreshNowPlayingInfo() {
+        guard nowPlaying != .placeholder else {
+            clearNowPlayingInfo()
+            return
+        }
+
+        var info: [String: Any] = [
+            MPMediaItemPropertyTitle: nowPlaying.trackName,
+            MPMediaItemPropertyAlbumTitle: nowPlaying.albumName,
+            MPNowPlayingInfoPropertyElapsedPlaybackTime: playbackPosition,
+            MPNowPlayingInfoPropertyPlaybackRate: playbackState == .playing ? 1.0 : 0.0,
+            MPNowPlayingInfoPropertyDefaultPlaybackRate: 1.0,
+        ]
+
+        if let artist = nowPlaying.trackArtist ?? nowPlaying.albumArtist {
+            info[MPMediaItemPropertyArtist] = artist
+        }
+
+        if playbackDuration > 0 {
+            info[MPMediaItemPropertyPlaybackDuration] = playbackDuration
+        }
+
+        if let nowPlayingArtwork {
+            info[MPMediaItemPropertyArtwork] = nowPlayingArtwork
+        }
+
+        let nowPlayingInfoCenter = MPNowPlayingInfoCenter.default()
+        nowPlayingInfoCenter.nowPlayingInfo = info
+        nowPlayingInfoCenter.playbackState = nowPlayingPlaybackState
+    }
+
+    private func clearNowPlayingInfo() {
+        nowPlayingArtworkTask?.cancel()
+        nowPlayingArtwork = nil
+        nowPlayingInfoTrackID = nil
+        let nowPlayingInfoCenter = MPNowPlayingInfoCenter.default()
+        nowPlayingInfoCenter.nowPlayingInfo = nil
+        nowPlayingInfoCenter.playbackState = .stopped
+    }
+
+    private var nowPlayingPlaybackState: MPNowPlayingPlaybackState {
+        switch playbackState {
+        case .playing, .buffering:
+            return .playing
+        case .paused:
+            return .paused
+        case .stopped:
+            return .stopped
+        }
+    }
+
+    private func loadNowPlayingArtwork(from track: MediaTrack) {
+        nowPlayingArtworkTask?.cancel()
+
+        guard let artworkURL = track.artworkURL else { return }
+
+        let trackID = track.id
+        nowPlayingArtworkTask = Task.detached(priority: .utility) { [weak self] in
+            do {
+                let data: Data
+                if artworkURL.isFileURL {
+                    data = try Data(contentsOf: artworkURL)
+                } else {
+                    let (remoteData, _) = try await URLSession.shared.data(from: artworkURL)
+                    data = remoteData
+                }
+
+                guard !Task.isCancelled,
+                      let image = NSImage(data: data) else { return }
+
+                let artwork = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
+                await MainActor.run {
+                    guard let self,
+                          self.nowPlayingInfoTrackID == trackID,
+                          !Task.isCancelled else { return }
+                    self.nowPlayingArtwork = artwork
+                    self.refreshNowPlayingInfo()
+                }
+            } catch {
+                await MainActor.run {
+                    guard let self,
+                          self.nowPlayingInfoTrackID == trackID else { return }
+                    self.logDebug("Now playing artwork load failed for \(track.title): \(error.localizedDescription)")
+                }
+            }
+        }
     }
 
     private func invalidatePendingSeek() {
