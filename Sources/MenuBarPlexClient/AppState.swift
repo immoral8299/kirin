@@ -80,7 +80,13 @@ final class AppState {
             } else {
                 settingsStore.settings.mediaSource = .unspecified
             }
-        case .local, .unspecified:
+        case .local:
+            settingsStore.switchProfile(
+                to: SettingsStore.localProfileKey(),
+                seed: seedSettings
+            )
+            settingsStore.settings.mediaSource = .local
+        case .unspecified:
             break
         }
 
@@ -117,6 +123,10 @@ final class AppState {
         case .navidrome:
             Task {
                 await libraryStore.reloadData()
+            }
+        case .local:
+            Task {
+                await restorePersistedLocalQueue()
             }
         default:
             break
@@ -336,21 +346,111 @@ final class AppState {
     }
 
     func configureLocalFiles() {
+        settingsStore.switchProfile(
+            to: SettingsStore.localProfileKey(),
+            seed: settingsStore.settings
+        )
         settingsStore.settings.mediaSource = .local
         settingsStore.settings.selectedServerID = nil
         settingsStore.settings.selectedLibraryID = nil
         switchMediaService(to: LocalService())
         libraryStore.resetContent()
         queueManager.resetQueue()
+        persistLocalQueue()
         playbackEngine.stopPlayback()
         playbackEngine.resetForNewTrack()
     }
 
-    func importLocalFiles() async {
-        let tracks = await LocalFileImporter.selectFilesAndFolders()
+    func selectLocalFilesForImport() async -> LocalFileImportResult {
+        await LocalFileImporter.selectFilesAndFolders()
+    }
+
+    func buildLocalTracks(from urls: [URL]) async -> LocalFileImportResult {
+        await LocalFileImporter.buildTracks(from: urls)
+    }
+
+    func playLocalTracks(_ tracks: [MediaTrack]) {
         guard !tracks.isEmpty else { return }
-        configureLocalFiles()
-        queueManager.playTracks(tracks, startingAt: tracks.first?.id)
+        activateLocalModeIfNeeded(resetPlayback: false)
+        queueManager.replaceLocalQueue(with: tracks, startPlayback: true)
+        persistLocalQueue()
+    }
+
+    func addLocalTracksNext(_ tracks: [MediaTrack]) {
+        guard !tracks.isEmpty else { return }
+        activateLocalModeIfNeeded(resetPlayback: false)
+        queueManager.insertLocalTracksNext(tracks)
+        persistLocalQueue()
+    }
+
+    func appendLocalTracks(_ tracks: [MediaTrack]) {
+        guard !tracks.isEmpty else { return }
+        activateLocalModeIfNeeded(resetPlayback: false)
+        queueManager.appendLocalTracks(tracks)
+        persistLocalQueue()
+    }
+
+    func openLocalFilesFromFinder(_ urls: [URL]) async {
+        let result = await buildLocalTracks(from: urls)
+        guard !result.tracks.isEmpty else { return }
+        playLocalTracks(result.tracks)
+    }
+
+    private func activateLocalModeIfNeeded(resetPlayback: Bool) {
+        guard activeMediaSource != .local else { return }
+        settingsStore.switchProfile(
+            to: SettingsStore.localProfileKey(),
+            seed: settingsStore.settings
+        )
+        settingsStore.settings.mediaSource = .local
+        settingsStore.settings.selectedServerID = nil
+        settingsStore.settings.selectedLibraryID = nil
+        switchMediaService(to: LocalService())
+        libraryStore.resetContent()
+        if resetPlayback {
+            queueManager.resetQueue()
+            persistLocalQueue()
+            playbackEngine.stopPlayback()
+            playbackEngine.resetForNewTrack()
+        }
+    }
+
+    private func restorePersistedLocalQueue() async {
+        let savedQueue = settingsStore.settings.localQueue
+        guard !savedQueue.filePaths.isEmpty else { return }
+
+        let existingFileURLs = savedQueue.filePaths
+            .map { URL(fileURLWithPath: $0) }
+            .filter { FileManager.default.fileExists(atPath: $0.path) }
+        guard !existingFileURLs.isEmpty else {
+            settingsStore.settings.localQueue = .default
+            return
+        }
+
+        let result = await LocalFileImporter.buildTracks(from: existingFileURLs)
+        guard !result.tracks.isEmpty else {
+            settingsStore.settings.localQueue = .default
+            return
+        }
+
+        queueManager.restoreLocalQueue(result.tracks, currentTrackID: savedQueue.currentTrackID)
+        persistLocalQueue()
+    }
+
+    private func persistLocalQueue() {
+        guard activeMediaSource == .local else { return }
+
+        let filePaths = queueManager.allTracks.compactMap { track -> String? in
+            if track.streamURL.isFileURL {
+                return track.streamURL.standardizedFileURL.path
+            }
+            return track.id.hasPrefix("/") ? track.id : nil
+        }
+
+        settingsStore.settings.localQueue = LocalQueueSettings(
+            filePaths: filePaths,
+            currentTrackID: queueManager.currentPlayQueueTrackID
+        )
     }
 
     private func switchMediaService(to service: MediaService) {
@@ -426,15 +526,23 @@ final class AppState {
     // MARK: - Playback
 
     func togglePlayback() {
+        if playbackEngine.currentTrack == nil,
+           queueManager.currentTrack != nil {
+            queueManager.playCurrentQueueTrack()
+            return
+        }
+
         playbackEngine.togglePlayback()
     }
 
     func nextTrack() {
         queueManager.advanceToNextTrack()
+        persistLocalQueue()
     }
 
     func previousTrack() {
         queueManager.goToPreviousTrack()
+        persistLocalQueue()
     }
 
     func seekToProgress(_ progress: Double) {
@@ -443,10 +551,15 @@ final class AppState {
 
     func toggleShuffle() {
         queueManager.toggleShuffle()
+        persistLocalQueue()
     }
 
     func setLoudnessLevelingEnabled(_ isEnabled: Bool) {
         playbackEngine.setLoudnessLevelingEnabled(isEnabled)
+    }
+
+    func setFallbackLoudnessGainDecibels(_ decibels: Int) {
+        playbackEngine.setFallbackLoudnessGainDecibels(decibels)
     }
 
     func setListenedThresholdPercentage(_ percentage: Int) {
@@ -505,18 +618,22 @@ final class AppState {
 
     func selectPlayQueueTrack(id: String) {
         queueManager.selectPlayQueueTrack(id: id)
+        persistLocalQueue()
     }
 
     func removePlayQueueTrack(id: String) {
         queueManager.removePlayQueueTrack(id: id)
+        persistLocalQueue()
     }
 
-    func movePlayQueueTrack(id: String, before targetID: String) {
+    func movePlayQueueTrack(id: String, before targetID: String?) {
         queueManager.movePlayQueueTrack(id: id, before: targetID)
+        persistLocalQueue()
     }
 
     func clearUpcomingPlayQueueTracks() {
         queueManager.clearUpcomingPlayQueueTracks()
+        persistLocalQueue()
     }
 
 }
@@ -528,6 +645,7 @@ extension AppState: PlaybackEngineDelegate {
         timelineTracker.markTrackedTrackListenedIfNeeded(force: true)
         timelineTracker.stopTracking()
         queueManager.handleTrackEnded()
+        persistLocalQueue()
     }
 
     func playbackEngine(_ engine: PlaybackEngine, didUpdatePosition position: Double, duration: Double) {

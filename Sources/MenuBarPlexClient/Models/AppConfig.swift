@@ -223,11 +223,51 @@ struct ServerSettings: Codable, Equatable {
 
 struct PlaybackSettings: Codable, Equatable {
     var loudnessLevelingEnabled: Bool
+    var fallbackLoudnessGainDecibels: Int
     var listenedThresholdPercentage: Int
+
+    private enum CodingKeys: String, CodingKey {
+        case loudnessLevelingEnabled
+        case fallbackLoudnessGainDecibels
+        case listenedThresholdPercentage
+    }
 
     static let `default` = PlaybackSettings(
         loudnessLevelingEnabled: false,
+        fallbackLoudnessGainDecibels: -6,
         listenedThresholdPercentage: 90
+    )
+
+    init(
+        loudnessLevelingEnabled: Bool,
+        fallbackLoudnessGainDecibels: Int,
+        listenedThresholdPercentage: Int
+    ) {
+        self.loudnessLevelingEnabled = loudnessLevelingEnabled
+        self.fallbackLoudnessGainDecibels = Self.clampedFallbackLoudnessGain(fallbackLoudnessGainDecibels)
+        self.listenedThresholdPercentage = listenedThresholdPercentage
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        loudnessLevelingEnabled = try container.decodeIfPresent(Bool.self, forKey: .loudnessLevelingEnabled) ?? false
+        let fallbackGain = try container.decodeIfPresent(Int.self, forKey: .fallbackLoudnessGainDecibels) ?? -6
+        fallbackLoudnessGainDecibels = Self.clampedFallbackLoudnessGain(fallbackGain)
+        listenedThresholdPercentage = try container.decodeIfPresent(Int.self, forKey: .listenedThresholdPercentage) ?? 90
+    }
+
+    static func clampedFallbackLoudnessGain(_ value: Int) -> Int {
+        min(max(value, -10), -2)
+    }
+}
+
+struct LocalQueueSettings: Codable, Equatable {
+    var filePaths: [String]
+    var currentTrackID: String?
+
+    static let `default` = LocalQueueSettings(
+        filePaths: [],
+        currentTrackID: nil
     )
 }
 
@@ -237,6 +277,7 @@ struct AppSettings: Codable, Equatable {
     var playback: PlaybackSettings
     var mediaSource: ActiveMediaSource
     var navidromeConfig: NavidromeServerConfig
+    var localQueue: LocalQueueSettings
 
     private enum CodingKeys: String, CodingKey {
         case display
@@ -244,6 +285,7 @@ struct AppSettings: Codable, Equatable {
         case playback
         case mediaSource
         case navidromeConfig
+        case localQueue
     }
 
     init(display: DisplaySettings, server: ServerSettings, playback: PlaybackSettings) {
@@ -252,6 +294,7 @@ struct AppSettings: Codable, Equatable {
         self.playback = playback
         self.mediaSource = .unspecified
         self.navidromeConfig = .default
+        self.localQueue = .default
     }
 
     init(from decoder: Decoder) throws {
@@ -273,6 +316,7 @@ struct AppSettings: Codable, Equatable {
         self.playback = try container.decodeIfPresent(PlaybackSettings.self, forKey: .playback) ?? .default
         self.mediaSource = try container.decodeIfPresent(ActiveMediaSource.self, forKey: .mediaSource) ?? .unspecified
         self.navidromeConfig = try container.decodeIfPresent(NavidromeServerConfig.self, forKey: .navidromeConfig) ?? .default
+        self.localQueue = try container.decodeIfPresent(LocalQueueSettings.self, forKey: .localQueue) ?? .default
     }
 
     static let `default` = AppSettings(
@@ -315,5 +359,9 @@ extension AppSettings {
     var listenedThresholdPercentage: Int {
         get { playback.listenedThresholdPercentage }
         set { playback.listenedThresholdPercentage = newValue }
+    }
+    var fallbackLoudnessGainDecibels: Int {
+        get { playback.fallbackLoudnessGainDecibels }
+        set { playback.fallbackLoudnessGainDecibels = PlaybackSettings.clampedFallbackLoudnessGain(newValue) }
     }
 }

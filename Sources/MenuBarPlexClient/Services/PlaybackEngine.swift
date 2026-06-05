@@ -39,7 +39,6 @@ final class PlaybackEngine: ObservableObject {
     private var prebufferedTrackID: String?
     private var prebufferedItem: AVPlayerItem?
     private var prebufferTask: Task<Void, Never>?
-    private let fallbackLoudnessGain: Float = -6
     private let bufferingTransitionDelayNanoseconds: UInt64 = 1_500_000_000
     private let bufferingRetryDelayNanoseconds: UInt64 = 8_000_000_000
     private let maximumBufferingRetryCount = 3
@@ -102,6 +101,18 @@ final class PlaybackEngine: ObservableObject {
         guard context.settingsStore.settings.loudnessLevelingEnabled != isEnabled else { return }
         context.settingsStore.settings.loudnessLevelingEnabled = isEnabled
         logDebug(isEnabled ? "Loudness leveling enabled" : "Loudness leveling disabled")
+
+        guard let currentTrack = _currentTrack else { return }
+        Task {
+            await applyPlaybackVolume(for: currentTrack)
+        }
+    }
+
+    func setFallbackLoudnessGainDecibels(_ decibels: Int) {
+        let clampedDecibels = PlaybackSettings.clampedFallbackLoudnessGain(decibels)
+        guard context.settingsStore.settings.fallbackLoudnessGainDecibels != clampedDecibels else { return }
+        context.settingsStore.settings.fallbackLoudnessGainDecibels = clampedDecibels
+        logDebug("Fallback loudness gain set to \(clampedDecibels) dB")
 
         guard let currentTrack = _currentTrack else { return }
         Task {
@@ -261,7 +272,7 @@ final class PlaybackEngine: ObservableObject {
         logDebug("Loudness leveling enabled for \(track.title)")
 
         guard canResolveLoudnessGain(for: track) else {
-            return 1.0
+            return fallbackPlaybackVolume(for: track, reason: "No loudness analysis available")
         }
 
         let loudnessID = track.ratingKey ?? track.id
@@ -316,6 +327,7 @@ final class PlaybackEngine: ObservableObject {
     }
 
     private func fallbackPlaybackVolume(for track: MediaTrack, reason: String) -> Float {
+        let fallbackLoudnessGain = Float(context.settingsStore.settings.fallbackLoudnessGainDecibels)
         let volume = volumeScalar(for: fallbackLoudnessGain)
         logDebug("\(reason) for \(track.title); applying fallback \(formatted(decibels: fallbackLoudnessGain)) dB")
         return volume

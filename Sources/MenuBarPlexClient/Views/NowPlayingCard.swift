@@ -92,18 +92,24 @@ struct NowPlayingCard: View, Equatable {
                             set: { newValue in
                                 isSeeking = true
                                 sliderValue = newValue
-                                onSeek(newValue)
                             }
                         ),
                         in: 0 ... 1,
                         onEditingChanged: { editing in
-                            isSeeking = editing
+                            if editing {
+                                sliderValue = playbackProgress
+                                isSeeking = true
+                            } else {
+                                let seekProgress = sliderValue
+                                isSeeking = false
+                                onSeek(seekProgress)
+                            }
                         }
                     )
                     .tint(AppTheme.accent)
 
                     HStack {
-                        Text(formattedTime(playbackPosition))
+                        Text(formattedTime(displayedPlaybackPosition))
                         Spacer()
                         Text(formattedTime(playbackDuration))
                     }
@@ -165,6 +171,11 @@ struct NowPlayingCard: View, Equatable {
         }
 
         return "Nr. \(trackNumber)"
+    }
+
+    private var displayedPlaybackPosition: Double {
+        guard isSeeking, playbackDuration > 0 else { return playbackPosition }
+        return min(max(sliderValue, 0), 1) * playbackDuration
     }
 
     private func formattedTime(_ seconds: Double) -> String {

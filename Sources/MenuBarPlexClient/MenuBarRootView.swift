@@ -1,6 +1,7 @@
 import AppKit
 import Combine
 import SwiftUI
+import UniformTypeIdentifiers
 
 @MainActor
 final class PanelState: ObservableObject {
@@ -26,6 +27,7 @@ struct MenuBarRootView: View {
     let onClose: () -> Void
     let onPinChange: (Bool) -> Void
     let onPanelPositionChange: () -> Void
+    let onExternalFileDialogChange: (Bool) -> Void
     @ObservedObject var panelState: PanelState
     @ObservedObject private var authService: PlexAuthService
     @ObservedObject private var settingsStore: SettingsStore
@@ -37,13 +39,15 @@ struct MenuBarRootView: View {
         panelState: PanelState,
         onClose: @escaping () -> Void,
         onPinChange: @escaping (Bool) -> Void,
-        onPanelPositionChange: @escaping () -> Void
+        onPanelPositionChange: @escaping () -> Void,
+        onExternalFileDialogChange: @escaping (Bool) -> Void
     ) {
         self.appState = appState
         self.panelState = panelState
         self.onClose = onClose
         self.onPinChange = onPinChange
         self.onPanelPositionChange = onPanelPositionChange
+        self.onExternalFileDialogChange = onExternalFileDialogChange
         _authService = ObservedObject(wrappedValue: appState.authService)
         _settingsStore = ObservedObject(wrappedValue: appState.settingsStore)
         _updateChecker = ObservedObject(wrappedValue: appState.updateChecker)
@@ -87,7 +91,8 @@ struct MenuBarRootView: View {
             AuthenticatedContent(
                 appState: appState,
                 selectedTab: selectedTab,
-                onPanelPositionChange: onPanelPositionChange
+                onPanelPositionChange: onPanelPositionChange,
+                onExternalFileDialogChange: onExternalFileDialogChange
             )
         } else {
             WelcomeCard(
@@ -99,7 +104,7 @@ struct MenuBarRootView: View {
                 onConfigureNavidrome: appState.configureNavidrome,
                 onVerifyNavidrome: appState.verifyNavidromeConnection,
                 onPinChange: onPinChange,
-                onImportLocalFiles: { Task { await appState.importLocalFiles() } }
+                onConfigureLocalFiles: appState.configureLocalFiles
             )
         }
     }
@@ -201,12 +206,19 @@ private struct AuthenticatedContent: View {
     let appState: AppState
     let selectedTab: ContentTab
     let onPanelPositionChange: () -> Void
+    let onExternalFileDialogChange: (Bool) -> Void
     @ObservedObject private var libraryStore: LibraryStore
 
-    init(appState: AppState, selectedTab: ContentTab, onPanelPositionChange: @escaping () -> Void) {
+    init(
+        appState: AppState,
+        selectedTab: ContentTab,
+        onPanelPositionChange: @escaping () -> Void,
+        onExternalFileDialogChange: @escaping (Bool) -> Void
+    ) {
         self.appState = appState
         self.selectedTab = selectedTab
         self.onPanelPositionChange = onPanelPositionChange
+        self.onExternalFileDialogChange = onExternalFileDialogChange
         _libraryStore = ObservedObject(wrappedValue: appState.libraryStore)
     }
 
@@ -231,17 +243,17 @@ private struct AuthenticatedContent: View {
                     onSelectLibrary: appState.selectLibrary,
                     onRefreshServersAndLibraries: appState.refreshServersAndLibraries,
                     onSetLoudnessLevelingEnabled: appState.setLoudnessLevelingEnabled,
+                    onSetFallbackLoudnessGainDecibels: appState.setFallbackLoudnessGainDecibels,
                     onSetListenedThresholdPercentage: appState.setListenedThresholdPercentage,
                     onSignOut: appState.signOut,
-                    onPanelPositionChange: onPanelPositionChange,
-                    onImportLocalFiles: { Task { await appState.importLocalFiles() } }
+                    onPanelPositionChange: onPanelPositionChange
                 )
                 .frame(width: MenuBarLayout.contentWidth, alignment: .leading)
                 .background(AppTheme.panelFillSoft, in: RoundedRectangle(cornerRadius: AppCornerRadius.medium, style: .continuous))
             case .queue:
-                QueueContent(appState: appState)
+                QueueContent(appState: appState, onExternalFileDialogChange: onExternalFileDialogChange)
             default:
-                QueueContent(appState: appState)
+                QueueContent(appState: appState, onExternalFileDialogChange: onExternalFileDialogChange)
             }
         } else {
             activeLibraryBanner
@@ -259,6 +271,7 @@ private struct AuthenticatedContent: View {
                     onSelectLibrary: appState.selectLibrary,
                     onRefreshServersAndLibraries: appState.refreshServersAndLibraries,
                     onSetLoudnessLevelingEnabled: appState.setLoudnessLevelingEnabled,
+                    onSetFallbackLoudnessGainDecibels: appState.setFallbackLoudnessGainDecibels,
                     onSetListenedThresholdPercentage: appState.setListenedThresholdPercentage,
                     onSignOut: appState.signOut,
                     onPanelPositionChange: onPanelPositionChange
@@ -266,7 +279,7 @@ private struct AuthenticatedContent: View {
                 .frame(width: MenuBarLayout.contentWidth, alignment: .leading)
                 .background(AppTheme.panelFillSoft, in: RoundedRectangle(cornerRadius: AppCornerRadius.medium, style: .continuous))
             case .queue:
-                QueueContent(appState: appState)
+                QueueContent(appState: appState, onExternalFileDialogChange: onExternalFileDialogChange)
             case .search:
                 SearchView(appState: appState)
             case .home:
@@ -516,48 +529,261 @@ private struct HomeContent: View {
 
 private struct QueueContent: View {
     let appState: AppState
+    let onExternalFileDialogChange: (Bool) -> Void
     @ObservedObject private var libraryStore: LibraryStore
     @ObservedObject private var queueManager: QueueManager
+    @State private var pendingImportTracks: [MediaTrack] = []
+    @State private var pendingUnsupportedCount = 0
+    @State private var isImportDestinationPresented = false
+    @State private var isDropTargeted = false
+    @State private var importFeedback: String?
 
-    init(appState: AppState) {
+    init(appState: AppState, onExternalFileDialogChange: @escaping (Bool) -> Void) {
         self.appState = appState
+        self.onExternalFileDialogChange = onExternalFileDialogChange
         _libraryStore = ObservedObject(wrappedValue: appState.libraryStore)
         _queueManager = ObservedObject(wrappedValue: appState.queueManager)
     }
 
     var body: some View {
-        VStack(spacing: 14) {
-            if !libraryStore.queueStationRecommendations.isEmpty {
-                QueueStationRecommendationsSection(
-                    recommendations: libraryStore.queueStationRecommendations,
-                    pendingPlaybackID: queueManager.pendingPlaybackID,
-                    onSelect: appState.playStationRecommendation,
-                    onAddToQueue: { appState.enqueueStationRecommendation($0, playNext: false) }
+        ZStack(alignment: .top) {
+            VStack(spacing: 14) {
+                if !libraryStore.queueStationRecommendations.isEmpty {
+                    QueueStationRecommendationsSection(
+                        recommendations: libraryStore.queueStationRecommendations,
+                        pendingPlaybackID: queueManager.pendingPlaybackID,
+                        onSelect: appState.playStationRecommendation,
+                        onAddToQueue: { appState.enqueueStationRecommendation($0, playNext: false) }
+                    )
+                    .transition(.opacity)
+                }
+                if !libraryStore.relatedAlbums.isEmpty {
+                    RelatedAlbumsSection(
+                        albums: libraryStore.relatedAlbums,
+                        pendingPlaybackID: queueManager.pendingPlaybackID,
+                        pendingPlaybackSource: queueManager.pendingPlaybackSource,
+                        onSelect: { appState.playAlbum($0) },
+                        onPlayNext: { appState.enqueueAlbum($0, playNext: true) },
+                        onAddToQueue: { appState.enqueueAlbum($0, playNext: false) }
+                    )
+                    .transition(.opacity)
+                }
+                PlayQueueView(
+                    queueManager: appState.queueManager,
+                    onSelectTrack: appState.selectPlayQueueTrack,
+                    onRemoveTrack: appState.removePlayQueueTrack,
+                    onMoveTrack: appState.movePlayQueueTrack,
+                    onClearUpcomingTracks: appState.clearUpcomingPlayQueueTracks,
+                    isLocalMode: appState.isLocalMode,
+                    onImportLocalFiles: chooseLocalFiles
                 )
-                .transition(.opacity)
             }
-            if !libraryStore.relatedAlbums.isEmpty {
-                RelatedAlbumsSection(
-                    albums: libraryStore.relatedAlbums,
-                    pendingPlaybackID: queueManager.pendingPlaybackID,
-                    pendingPlaybackSource: queueManager.pendingPlaybackSource,
-                    onSelect: { appState.playAlbum($0) },
-                    onPlayNext: { appState.enqueueAlbum($0, playNext: true) },
-                    onAddToQueue: { appState.enqueueAlbum($0, playNext: false) }
-                )
-                .transition(.opacity)
+            .opacity(isImportDestinationPresented ? 0 : 1)
+            .allowsHitTesting(!isImportDestinationPresented)
+
+            if isImportDestinationPresented {
+                importDestinationOverlay
+                    .transition(.opacity.combined(with: .scale(scale: 0.98)))
+                    .zIndex(1)
             }
-            PlayQueueView(
-                queueManager: appState.queueManager,
-                onSelectTrack: appState.selectPlayQueueTrack,
-                onRemoveTrack: appState.removePlayQueueTrack,
-                onMoveTrack: appState.movePlayQueueTrack,
-                onClearUpcomingTracks: appState.clearUpcomingPlayQueueTracks,
-                isLocalMode: appState.isLocalMode,
-                onImportLocalFiles: { Task { await appState.importLocalFiles() } }
-            )
         }
         .padding(.top, 5.5)
+        .overlay {
+            if appState.isLocalMode && isDropTargeted {
+                RoundedRectangle(cornerRadius: AppCornerRadius.medium, style: .continuous)
+                    .stroke(AppTheme.accent, style: StrokeStyle(lineWidth: 2, dash: [7, 5]))
+                    .background(AppTheme.accent.opacity(0.08), in: RoundedRectangle(cornerRadius: AppCornerRadius.medium, style: .continuous))
+            }
+        }
+        .overlay(alignment: .bottom) {
+            if let importFeedback {
+                Text(importFeedback)
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.primary)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 7)
+                    .background(AppTheme.overlayStrong, in: RoundedRectangle(cornerRadius: AppCornerRadius.compact, style: .continuous))
+                    .padding(.bottom, 8)
+                    .transition(.opacity.combined(with: .move(edge: .bottom)))
+            }
+        }
+        .onDrop(of: [UTType.fileURL.identifier], isTargeted: $isDropTargeted) { providers in
+            guard appState.isLocalMode else { return false }
+            Task {
+                await importDroppedFiles(from: providers)
+            }
+            return true
+        }
         .animation(.easeInOut(duration: 0.25), value: libraryStore.queueStationRecommendations.count + libraryStore.relatedAlbums.count)
+    }
+
+    private var importDestinationOverlay: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                Image(systemName: "music.note.list")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(AppTheme.accent)
+                Text("Add Local Music")
+                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                Spacer()
+                Button {
+                    dismissImportActions()
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 11, weight: .semibold))
+                        .padding(5)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .focusable(false)
+                .foregroundStyle(.secondary.opacity(0.78))
+                .interactiveCursor()
+                .help("Cancel")
+            }
+
+            Text(importDestinationMessage)
+                .font(.system(size: 11, weight: .medium, design: .rounded))
+                .foregroundStyle(.secondary.opacity(0.78))
+
+            HStack(spacing: 8) {
+                importActionButton("Play", icon: "play.fill") {
+                    appState.playLocalTracks(pendingImportTracks)
+                    clearPendingImport()
+                }
+
+                importActionButton("Add Next", icon: "text.line.first.and.arrowtriangle.forward") {
+                    appState.addLocalTracksNext(pendingImportTracks)
+                    clearPendingImport()
+                }
+                .disabled(queueManager.currentPlayQueueTrackID == nil)
+                .opacity(queueManager.currentPlayQueueTrackID == nil ? 0.45 : 1)
+
+                importActionButton("Add to Queue", icon: "text.append") {
+                    appState.appendLocalTracks(pendingImportTracks)
+                    clearPendingImport()
+                }
+            }
+        }
+        .padding(14)
+        .frame(width: MenuBarLayout.contentWidth, alignment: .leading)
+        .background(AppTheme.panelFill, in: RoundedRectangle(cornerRadius: AppCornerRadius.medium, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: AppCornerRadius.medium, style: .continuous)
+                .stroke(AppTheme.overlayStrong, lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.22), radius: 14, y: 8)
+    }
+
+    private func importActionButton(_ title: String, icon: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: icon)
+                .font(.system(size: 11, weight: .semibold, design: .rounded))
+                .lineLimit(1)
+                .frame(maxWidth: .infinity)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 8)
+                .background(AppTheme.overlayMedium, in: RoundedRectangle(cornerRadius: AppCornerRadius.compact, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .focusable(false)
+        .foregroundStyle(AppTheme.accent)
+        .interactiveCursor()
+    }
+
+    private var importDestinationMessage: String {
+        let trackCount = pendingImportTracks.count
+        let trackWord = trackCount == 1 ? "track" : "tracks"
+        if pendingUnsupportedCount > 0 {
+            let fileWord = pendingUnsupportedCount == 1 ? "file" : "files"
+            return "\(trackCount) \(trackWord) ready. \(pendingUnsupportedCount) unsupported \(fileWord) skipped."
+        }
+        return "\(trackCount) \(trackWord) ready."
+    }
+
+    private func chooseLocalFiles() {
+        Task {
+            onExternalFileDialogChange(true)
+            let result = await appState.selectLocalFilesForImport()
+            onExternalFileDialogChange(false)
+            presentImportActions(for: result)
+        }
+    }
+
+    private func importDroppedFiles(from providers: [NSItemProvider]) async {
+        let urls = await fileURLs(from: providers)
+        guard !urls.isEmpty else {
+            showImportFeedback("No files found in drop.")
+            return
+        }
+        presentImportActions(for: await appState.buildLocalTracks(from: urls))
+    }
+
+    private func presentImportActions(for result: LocalFileImportResult) {
+        guard !result.tracks.isEmpty else {
+            if result.unsupportedCount > 0 {
+                showImportFeedback("Unsupported audio files skipped.")
+            }
+            return
+        }
+
+        guard queueManager.currentPlayQueueTrackID != nil else {
+            appState.playLocalTracks(result.tracks)
+            if result.unsupportedCount > 0 {
+                showImportFeedback("Unsupported audio files skipped.")
+            }
+            return
+        }
+
+        pendingImportTracks = result.tracks
+        pendingUnsupportedCount = result.unsupportedCount
+        isImportDestinationPresented = true
+    }
+
+    private func clearPendingImport() {
+        pendingImportTracks = []
+        pendingUnsupportedCount = 0
+        isImportDestinationPresented = false
+    }
+
+    private func dismissImportActions() {
+        clearPendingImport()
+    }
+
+    private func showImportFeedback(_ message: String) {
+        importFeedback = message
+        Task {
+            try? await Task.sleep(for: .seconds(2.5))
+            guard importFeedback == message else { return }
+            importFeedback = nil
+        }
+    }
+
+    private func fileURLs(from providers: [NSItemProvider]) async -> [URL] {
+        var urls: [URL] = []
+        for provider in providers where provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
+            if let url = await fileURL(from: provider) {
+                urls.append(url)
+            }
+        }
+        return urls
+    }
+
+    private func fileURL(from provider: NSItemProvider) async -> URL? {
+        await withCheckedContinuation { continuation in
+            provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
+                let url: URL?
+                if let itemURL = item as? URL {
+                    url = itemURL
+                } else if let data = item as? Data,
+                          let string = String(data: data, encoding: .utf8) {
+                    url = URL(string: string)
+                } else if let string = item as? String {
+                    url = URL(string: string)
+                } else {
+                    url = nil
+                }
+                continuation.resume(returning: url)
+            }
+        }
     }
 }

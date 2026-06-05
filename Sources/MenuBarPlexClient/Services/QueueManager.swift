@@ -312,6 +312,48 @@ final class QueueManager: ObservableObject {
         }
     }
 
+    func replaceLocalQueue(with tracks: [MediaTrack], startPlayback: Bool) {
+        guard !tracks.isEmpty else { return }
+        replacePlaybackQueue(with: tracks, keepingTrackID: tracks.first?.id)
+        if startPlayback {
+            Task {
+                await playCurrentTrack()
+            }
+        }
+    }
+
+    func restoreLocalQueue(_ tracks: [MediaTrack], currentTrackID: String?) {
+        guard !tracks.isEmpty else { return }
+        replacePlaybackQueue(with: tracks, keepingTrackID: currentTrackID ?? tracks.first?.id)
+    }
+
+    func insertLocalTracksNext(_ tracks: [MediaTrack]) {
+        guard !tracks.isEmpty else { return }
+        guard let currentTrack else {
+            replaceLocalQueue(with: tracks, startPlayback: false)
+            return
+        }
+
+        var nextQueue = playbackQueue
+        let insertIndex = min(currentQueueIndex + 1, nextQueue.count)
+        nextQueue.insert(contentsOf: tracks, at: insertIndex)
+        applyLocalQueueEdit(nextQueue, keepingTrackID: currentTrack.id)
+        logDebug("Inserted \(tracks.count) local track(s) next")
+    }
+
+    func appendLocalTracks(_ tracks: [MediaTrack]) {
+        guard !tracks.isEmpty else { return }
+        guard let currentTrack else {
+            replaceLocalQueue(with: tracks, startPlayback: false)
+            return
+        }
+
+        var nextQueue = playbackQueue
+        nextQueue.append(contentsOf: tracks)
+        applyLocalQueueEdit(nextQueue, keepingTrackID: currentTrack.id)
+        logDebug("Appended \(tracks.count) local track(s)")
+    }
+
     func playStationRecommendation(_ recommendation: MediaStationRecommendation) {
         guard let plexService = context.plexService,
               let server = context.libraryStore?.selectedPlexServer,
@@ -344,6 +386,13 @@ final class QueueManager: ObservableObject {
         }
 
         currentQueueIndex = index
+        Task {
+            await playCurrentTrack()
+        }
+    }
+
+    func playCurrentQueueTrack() {
+        guard currentTrack != nil else { return }
         Task {
             await playCurrentTrack()
         }
@@ -389,21 +438,34 @@ final class QueueManager: ObservableObject {
         }
     }
 
-    func movePlayQueueTrack(id: String, before targetID: String) {
+    func movePlayQueueTrack(id: String, before targetID: String?) {
         guard id != targetID,
               id != currentTrack?.id,
               let sourceIndex = playbackQueue.firstIndex(where: { $0.id == id }),
-              let targetIndex = playbackQueue.firstIndex(where: { $0.id == targetID }),
-              sourceIndex > currentQueueIndex, targetIndex > currentQueueIndex else {
+              sourceIndex > currentQueueIndex else {
             return
         }
+        let targetIndex: Int
+        if let targetID {
+            guard let index = playbackQueue.firstIndex(where: { $0.id == targetID }) else { return }
+            targetIndex = index
+        } else {
+            targetIndex = playbackQueue.count
+        }
+        guard targetIndex > currentQueueIndex else { return }
 
         if context.mediaService.supportsServerManagedQueue,
            let playQueueID {
             let playQueueItemID = playbackQueue[sourceIndex].playQueueItemID ?? playbackQueue[sourceIndex].id
+            var previewQueue = playbackQueue
+            let track = previewQueue.remove(at: sourceIndex)
+            let adjustedTarget = sourceIndex < targetIndex ? targetIndex - 1 : targetIndex
+            previewQueue.insert(track, at: min(adjustedTarget, previewQueue.count))
+
+            let movedIndex = previewQueue.firstIndex(where: { $0.id == id }) ?? sourceIndex
             let afterPlayQueueItemID: String?
-            if targetIndex > 0 {
-                afterPlayQueueItemID = playbackQueue[targetIndex - 1].playQueueItemID ?? playbackQueue[targetIndex - 1].id
+            if movedIndex > 0 {
+                afterPlayQueueItemID = previewQueue[movedIndex - 1].playQueueItemID ?? previewQueue[movedIndex - 1].id
             } else {
                 afterPlayQueueItemID = nil
             }
@@ -425,7 +487,7 @@ final class QueueManager: ObservableObject {
         let track = playbackQueue[sourceIndex]
         playbackQueue.remove(at: sourceIndex)
         let adjustedTarget = sourceIndex < targetIndex ? targetIndex - 1 : targetIndex
-        playbackQueue.insert(track, at: adjustedTarget)
+        playbackQueue.insert(track, at: min(adjustedTarget, playbackQueue.count))
         visiblePlayQueue = playbackQueue
         updatePrebufferedNextTrack()
     }
@@ -723,6 +785,23 @@ final class QueueManager: ObservableObject {
         isShuffleEnabled = snapshot.isShuffled
         orderedPlaybackQueue = snapshot.tracks
         applyPlaybackOrder(keepingTrackID: keepingTrackID)
+    }
+
+    private func applyLocalQueueEdit(_ tracks: [MediaTrack], keepingTrackID: String?) {
+        playQueueID = nil
+        playQueueVersion = nil
+        playQueueTotalCount = tracks.count
+        orderedPlaybackQueue = tracks
+        playbackQueue = tracks
+        if let keepingTrackID,
+           let index = playbackQueue.firstIndex(where: { $0.id == keepingTrackID }) {
+            currentQueueIndex = index
+        } else {
+            currentQueueIndex = 0
+        }
+        visiblePlayQueue = playbackQueue
+        self.context.libraryStore?.refreshQueueStationRecommendations(for: playbackQueue)
+        updatePrebufferedNextTrack()
     }
 
     private func applyPlaybackOrder(keepingTrackID: String?) {

@@ -29,7 +29,7 @@ enum AppTheme {
 }
 
 enum AppCornerRadius {
-    static let panel: CGFloat = 16
+    static let panel: CGFloat = 18
     static let card: CGFloat = 14
     static let medium: CGFloat = 12
     static let small: CGFloat = 10

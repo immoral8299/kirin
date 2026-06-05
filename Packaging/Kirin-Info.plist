@@ -6,16 +6,37 @@
     <string>en</string>
     <key>CFBundleDisplayName</key>
     <string>Kirin</string>
-    <key>CFBundleExecutable</key>
-    <string>Kirin</string>
-    <key>CFBundleIdentifier</key>
-    <string>com.Kirin.app</string>
-    <key>CFBundleInfoDictionaryVersion</key>
-    <string>6.0</string>
-    <key>CFBundleName</key>
-    <string>Kirin</string>
-    <key>CFBundlePackageType</key>
-    <string>APPL</string>
+	<key>CFBundleExecutable</key>
+	<string>Kirin</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.Kirin.app</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>Kirin</string>
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Audio File</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>public.audio</string>
+				<string>public.mp3</string>
+				<string>public.mpeg-4-audio</string>
+				<string>com.apple.m4a-audio</string>
+				<string>com.microsoft.waveform-audio</string>
+				<string>public.aiff-audio</string>
+				<string>org.xiph.flac</string>
+			</array>
+		</dict>
+	</array>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
     <key>CFBundleShortVersionString</key>
     <string>0.1.0</string>
     <key>CFBundleVersion</key>

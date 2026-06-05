@@ -59,6 +59,10 @@ final class SettingsStore: ObservableObject {
         "navidrome-\(sanitizedProfileKey(connectionName))"
     }
 
+    static func localProfileKey() -> String {
+        "local-files"
+    }
+
     static func sanitizedProfileKey(_ value: String) -> String {
         let sanitized = value
             .trimmingCharacters(in: .whitespacesAndNewlines)

@@ -9,7 +9,7 @@ struct WelcomeCard: View {
     let onConfigureNavidrome: (NavidromeServerConfig, String) -> Void
     let onVerifyNavidrome: (NavidromeServerConfig, String) async throws -> Void
     let onPinChange: (Bool) -> Void
-    let onImportLocalFiles: () -> Void
+    let onConfigureLocalFiles: () -> Void
 
     @State private var showNavidromeForm = false
 
@@ -80,7 +80,7 @@ struct WelcomeCard: View {
                     icon: "music.note",
                     color: AppTheme.accent,
                     action: {
-                        onImportLocalFiles()
+                        onConfigureLocalFiles()
                     }
                 )
             }

@@ -265,6 +265,14 @@ final class LibraryStore: ObservableObject {
     }
 
     func refreshRelatedAlbums(for track: MediaTrack) {
+        guard context.mediaService is LocalService == false else {
+            relatedAlbumsTask?.cancel()
+            relatedAlbumsTask = nil
+            relatedAlbums = []
+            relatedAlbumsTrackID = nil
+            return
+        }
+
         let albumID = track.albumRatingKey ?? track.id
         guard relatedAlbumsTrackID != albumID || relatedAlbums.isEmpty else { return }
 

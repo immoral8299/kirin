@@ -9,10 +9,10 @@ struct SettingsView: View {
     let onSelectLibrary: (String) -> Void
     let onRefreshServersAndLibraries: () -> Void
     let onSetLoudnessLevelingEnabled: (Bool) -> Void
+    let onSetFallbackLoudnessGainDecibels: (Int) -> Void
     let onSetListenedThresholdPercentage: (Int) -> Void
     let onSignOut: () -> Void
     let onPanelPositionChange: () -> Void
-    var onImportLocalFiles: (() -> Void)?
     let paddingSpaceWidth: CGFloat = 40
     let maxPickerLabelWidth: CGFloat = 180
 
@@ -62,27 +62,6 @@ struct SettingsView: View {
 
     @ViewBuilder
     private var localSettingsContent: some View {
-        settingsSection("Music") {
-            Button {
-                onImportLocalFiles?()
-            } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: "music.note.list")
-                        .font(.system(size: 13, weight: .semibold))
-                    Text("Choose Music Files or Folders")
-                        .font(.system(size: 12, weight: .semibold, design: .rounded))
-                    Spacer()
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(.secondary.opacity(0.5))
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 10)
-            }
-            .buttonStyle(.plain)
-            .interactiveCursor()
-        }
-
         settingsSection("Appearance") {
             pickerRow("Theme", selection: themePreferenceBinding, items: AppThemePreference.allCases.map { ($0.displayName, $0) })
             dividerRow
@@ -91,6 +70,8 @@ struct SettingsView: View {
 
         settingsSection("Playback") {
             toggleRow("Loudness Leveling", isOn: loudnessLevelingBinding)
+            dividerRow
+            pickerRow("Fallback Gain", selection: fallbackLoudnessGainBinding, items: fallbackLoudnessGainOptions)
         }
     }
 
@@ -218,6 +199,8 @@ struct SettingsView: View {
 
         settingsSection("Playback") {
             toggleRow("Loudness Leveling", isOn: loudnessLevelingBinding)
+            dividerRow
+            pickerRow("Fallback Gain", selection: fallbackLoudnessGainBinding, items: fallbackLoudnessGainOptions)
             dividerRow
             pickerRow("Scrobble Threshold", selection: listenedThresholdBinding, items: listenedThresholdOptions)
         }
@@ -361,6 +344,14 @@ struct SettingsView: View {
         }
     }
 
+    private var fallbackLoudnessGainBinding: Binding<Int> {
+        Binding {
+            settingsStore.settings.fallbackLoudnessGainDecibels
+        } set: { newValue in
+            onSetFallbackLoudnessGainDecibels(newValue)
+        }
+    }
+
     private var themePreferenceBinding: Binding<AppThemePreference> {
         Binding {
             settingsStore.settings.themePreference
@@ -380,6 +371,10 @@ struct SettingsView: View {
 
     private var listenedThresholdOptions: [(String, Int)] {
         stride(from: 50, through: 100, by: 5).map { ("\($0)%", $0) }
+    }
+
+    private var fallbackLoudnessGainOptions: [(String, Int)] {
+        stride(from: -2, through: -10, by: -1).map { ("\($0) dB\($0 == settingsStore.settings.fallbackLoudnessGainDecibels ? " (Default)" : "")", $0) }
     }
 
     private var isCheckingForUpdates: Bool {

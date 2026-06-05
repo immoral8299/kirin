@@ -28,6 +28,7 @@ final class StatusItemController: NSObject {
     private var globalMouseMonitor: Any?
     private var isPanelPinned = false
     private var isPanelHiding = false
+    private var isExternalFileDialogPresented = false
     private var hasRenderedResolvedStatus = false
     private var currentStatusIconName = ""
     private var currentStatusText = ""
@@ -69,6 +70,9 @@ final class StatusItemController: NSObject {
                 },
                 onPanelPositionChange: { [weak self] in
                     self?.positionPanelIfVisible()
+                },
+                onExternalFileDialogChange: { [weak self] isPresented in
+                    self?.setExternalFileDialogPresented(isPresented)
                 }
             )
         )
@@ -159,8 +163,34 @@ final class StatusItemController: NSObject {
     }
 
     private func hidePanelIfUnpinned() {
-        guard panel.isVisible, !isPanelPinned else { return }
+        guard panel.isVisible, !isPanelPinned, !isExternalFileDialogPresented else { return }
         hidePanel()
+    }
+
+    private func setExternalFileDialogPresented(_ isPresented: Bool) {
+        isExternalFileDialogPresented = isPresented
+
+        if isPresented {
+            panel.level = .normal
+            panel.ignoresMouseEvents = true
+            animatePanelAlpha(to: 0, duration: 0.1)
+            NSApp.activate(ignoringOtherApps: true)
+        } else {
+            panel.level = .statusBar
+            panel.ignoresMouseEvents = false
+            guard panel.isVisible else { return }
+            positionPanel()
+            panel.makeKeyAndOrderFront(nil)
+            animatePanelAlpha(to: 1, duration: 0.14)
+        }
+    }
+
+    private func animatePanelAlpha(to alpha: CGFloat, duration: TimeInterval) {
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = duration
+            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            panel.animator().alphaValue = alpha
+        }
     }
 
     private func bind(appState: AppState) {
@@ -312,7 +342,7 @@ final class StatusItemController: NSObject {
         }
     }
 
-    private func showPanel() {
+    func showPanel() {
         isPanelPinned = false
         isPanelHiding = false
         panelState.openCount += 1
