@@ -13,6 +13,7 @@ struct SettingsView: View {
     let onSetListenedThresholdPercentage: (Int) -> Void
     let onSignOut: () -> Void
     let onPanelPositionChange: () -> Void
+    let defaultFallbackLoudnessGainDecibels: Int = -6
     let paddingSpaceWidth: CGFloat = 40
     let maxPickerLabelWidth: CGFloat = 180
 
@@ -374,7 +375,7 @@ struct SettingsView: View {
     }
 
     private var fallbackLoudnessGainOptions: [(String, Int)] {
-        stride(from: -2, through: -10, by: -1).map { ("\($0) dB\($0 == settingsStore.settings.fallbackLoudnessGainDecibels ? " (Default)" : "")", $0) }
+        stride(from: -2, through: -10, by: -1).map { ("\($0) dB\($0 == defaultFallbackLoudnessGainDecibels ? " (Default)" : "")", $0) }
     }
 
     private var isCheckingForUpdates: Bool {
