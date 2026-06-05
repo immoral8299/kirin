@@ -6,40 +6,46 @@ Kirin is a macOS 13+ menu bar music client for Plex, Navidrome, and local files.
 
 ### Menu bar popup with Plex home content and now-playing card
 
-<img src="./demo/kirin-screen-corner.png" width="360" styles="margin-inline: auto; display: block;">
+<img src="./demo/kirin-screen-corner.png" width="360" style="margin-inline: auto; display: block;">
 
 ### Plex home content with recently played and recently added sections
 
-<img src="./demo/kirin-plex-home.png" width="360" styles="margin-inline: auto; display: block;">
+<img src="./demo/kirin-plex-home.png" width="360" style="margin-inline: auto; display: block;">
 
 ### Play queue view
 
-<img src="./demo/kirin-play-queue.png" width="360" styles="margin-inline: auto; display: block;">
+<img src="./demo/kirin-play-queue.png" width="360" style="margin-inline: auto; display: block;">
 
 ### Navidrome connection flow
 
-<img src="./demo/kirin-navidrome-login.png" width="360" styles="margin-inline: auto; display: block;">
+<img src="./demo/kirin-navidrome-login.png" width="360" style="margin-inline: auto; display: block;">
 
 ### Local file mode
 
-<img src="./demo/kirin-local-files-mode.png" width="360" styles="margin-inline: auto; display: block;">
+<img src="./demo/kirin-local-files-mode.png" width="360" style="margin-inline: auto; display: block;">
 
 ### Search view
 
-<img src="./demo/kirin-search-mode.png" width="360" styles="margin-inline: auto; display: block;">
+<img src="./demo/kirin-search-mode.png" width="360" style="margin-inline: auto; display: block;">
 
 ### Settings
 
-<img src="./demo/kirin-settings.png" width="360" styles="margin-inline: auto; display: block;">
+<img src="./demo/kirin-settings.png" width="360" style="margin-inline: auto; display: block;">
+
+## Recent Changes
+
+Recent functional updates improved local-file playback, release checks, and menu bar polish. Local mode now persists its play queue, restores existing files on launch, accepts Finder "Open With Kirin" audio files, supports drag-and-drop imports, and lets new local tracks replace the queue, play next, or append. Loudness leveling now has a configurable fallback gain for tracks without analysis data. Update checks bypass cached manifests, and the menu bar status icon/text alignment was adjusted. The latest commits also refreshed the README demo captures and added macOS Now Playing and Control Center integration.
 
 ## Features
 
 - Native macOS menu bar app built with SwiftUI `MenuBarExtra`.
 - Source modes for Plex, Navidrome, and local audio files.
 - AVPlayer-backed playback with play, pause, seek, previous, and next controls.
+- macOS Now Playing and Control Center integration with artwork, playback progress, play/pause, next, previous, and seek commands.
 - Queue editing with remove, reorder, clear-upcoming, and shuffle controls.
-- Local file import from the app using a multi-select audio picker.
-- Local metadata loading from supported files, including title, artist, album, duration, and embedded artwork when available.
+- Local file import from the app, Finder "Open With Kirin", and drag-and-drop.
+- Local metadata loading from supported files, including title, artist, album, duration, track/disc numbers, embedded artwork, and folder artwork when available.
+- Persisted local queues with restored file paths and current-track selection.
 - Plex external-browser PIN authentication with Keychain-backed token storage.
 - Plex server and music-library discovery with persisted selection.
 - Plex home content, recently played albums, recently added albums, playlists, and stations.
@@ -47,24 +53,26 @@ Kirin is a macOS 13+ menu bar music client for Plex, Navidrome, and local files.
 - Navidrome connection support through the Subsonic API.
 - Configurable menu bar status text.
 - System, Light, and Dark appearance preferences.
-- Optional loudness leveling for supported server-backed tracks.
+- In-app update checks with cache-busted release manifests, release status, and direct download access when a release is available.
+- Optional loudness leveling for supported server-backed tracks, with configurable fallback gain for tracks without loudness analysis.
 - Timeline reporting and listened tracking for server-backed playback.
 
 ## Source Modes
 
 ### Local Files
 
-Local mode is queue-first. Choose audio files from the app, and Kirin replaces the current local playlist with those tracks, selects the first item, and starts playback. Local mode focuses on the play queue and settings instead of showing a home screen or library browser.
+Local mode is queue-first. Choose audio files or folders from the app, drop files into the queue, or open audio files from Finder with Kirin. New imports can replace the current local queue, play next, or append to the queue. Local mode focuses on the play queue and settings instead of showing a home screen or library browser.
 
 Current local-file support includes:
 
-- Multi-file import from `NSOpenPanel`
-- Basic metadata and embedded artwork extraction with `AVURLAsset`
+- Multi-file and folder import from `NSOpenPanel`
+- Finder document handling for supported audio files
+- Drag-and-drop import into the local queue
+- Import destination choices for replace, play next, and add to queue
+- Metadata, embedded artwork, and folder artwork extraction with `AVURLAsset`
 - Local queue playback and editing without network calls
+- Persisted local queue file paths and current-track selection
 - Queue and Settings tabs only
-- Session-only local queues
-
-Finder "Open With Kirin" support is planned, but not shipped yet.
 
 ### Plex
 
@@ -91,6 +99,7 @@ The popup adapts to the selected source:
 - Server-backed sources show library/home content, queue, search, and settings where available.
 - Local mode shows only Queue and Settings.
 - The Now Playing card stays centered around album art, track metadata, transport controls, and playback progress.
+- The active track is also published to macOS Now Playing surfaces, including Control Center and media-key driven remote commands.
 
 The menu bar status line uses this format:
 
@@ -106,6 +115,8 @@ Available metadata fields:
 - Album Name
 
 Settings persist in `UserDefaults`, while service credentials are stored in Keychain.
+
+The Settings view includes update status, last-check details, and a single update action. It checks for updates when no release is known, then opens the release download URL when a downloadable release is available.
 
 ## Requirements
 
