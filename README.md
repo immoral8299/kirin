@@ -6,42 +6,31 @@ Kirin is a macOS 13+ menu bar music client for Plex, Navidrome, and local files.
 
 ### Menu bar popup with Plex home content and now-playing card
 
-![Kirin menu bar popup](demo/kirin-screen-corner.png){height=240}
+<img src="./demo/kirin-screen-corner.png" width="360" styles="margin-inline: auto; display: block;">
 
 ### Plex home content with recently played and recently added sections
 
-![Kirin Plex home content](demo/kirin-plex-home.png){height=240}
+<img src="./demo/kirin-plex-home.png" width="360" styles="margin-inline: auto; display: block;">
 
 ### Play queue view
 
-![Kirin play queue](demo/kirin-play-queue.png){height=240}
+<img src="./demo/kirin-play-queue.png" width="360" styles="margin-inline: auto; display: block;">
 
 ### Navidrome connection flow
 
-![Kirin Navidrome connection flow](demo/kirin-navidrome-login.png){height=240}
+<img src="./demo/kirin-navidrome-login.png" width="360" styles="margin-inline: auto; display: block;">
 
 ### Local file mode
 
-![Kirin local file mode](demo/kirin-local-files-mode.png){height=240}
+<img src="./demo/kirin-local-files-mode.png" width="360" styles="margin-inline: auto; display: block;">
 
 ### Search view
 
-![Kirin search view](demo/kirin-search-mode.png){height=240}
+<img src="./demo/kirin-search-mode.png" width="360" styles="margin-inline: auto; display: block;">
 
 ### Settings
 
-![Kirin settings view](demo/kirin-settings.png){height=240}
-
-
-<!-- Add screenshots or short captures to `demo/` as the app evolves.
-
-Suggested captures:
-
-- `demo/menu-bar-popup.png` - main popup with now-playing controls
-- `demo/local-queue.png` - local file queue with imported tracks
-- `demo/settings.png` - settings view with source and appearance controls
-- `demo/plex-home.png` - Plex home/library view
-- `demo/navidrome-login.png` - Navidrome connection flow -->
+<img src="./demo/kirin-settings.png" width="360" styles="margin-inline: auto; display: block;">
 
 ## Features
 
