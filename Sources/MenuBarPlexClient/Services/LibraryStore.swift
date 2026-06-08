@@ -7,16 +7,7 @@ final class LibraryStore: ObservableObject {
     @Published var recentlyAddedAlbums: [MediaAlbum] = []
     @Published var playlists: [MediaPlaylist] = []
     @Published var stations: [MediaStation] = []
-    @Published var isLoadingLibrary = false {
-        didSet {
-            if !isLoadingLibrary, oldValue, libraryLoadError == nil,
-               context.playbackEngine?.currentTrack == nil {
-                Task {
-                    await ensureLastPlayedTrack()
-                }
-            }
-        }
-    }
+    @Published var isLoadingLibrary = false
     @Published var libraryLoadError: LibraryLoadError?
     @Published var availableServers: [MediaServer] = []
     @Published var availableLibraries: [MediaMusicLibrary] = []
@@ -567,30 +558,6 @@ final class LibraryStore: ObservableObject {
     private func clearSuccessfulLoadState() {
         libraryLoadError = nil
         shouldPresentInitialLoadFailure = false
-    }
-
-    private func ensureLastPlayedTrack() async {
-        guard let plexService,
-              let lastAlbum = recentlyPlayedAlbums.first,
-              let server = selectedPlexServer,
-              let userToken = plexService.authService.authToken else {
-            return
-        }
-
-        context.playbackEngine?.resetForNewTrack()
-
-        do {
-            let plexAlbum = PlexAlbum(id: lastAlbum.id, title: lastAlbum.title, artist: lastAlbum.artist, artworkURL: lastAlbum.artworkURL)
-            let tracks = try await plexService.fetchAlbumTracks(server: server, album: plexAlbum, userToken: userToken)
-            guard let firstTrack = tracks.first?.mediaTrack else {
-                logDebug("No tracks found in last played album")
-                return
-            }
-            context.playbackEngine?.preparePreviewTrack(firstTrack)
-            logDebug("Prepared last played track: \(firstTrack.title)")
-        } catch {
-            logDebug("Last played album track lookup failed: \(error.localizedDescription)")
-        }
     }
 
     private func resolveServer(from servers: [PlexServer]) -> PlexServer? {

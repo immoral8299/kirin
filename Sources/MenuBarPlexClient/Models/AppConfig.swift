@@ -271,6 +271,71 @@ struct LocalQueueSettings: Codable, Equatable {
     )
 }
 
+struct PersistedPlayQueueTrack: Codable, Equatable {
+    var id: String
+    var playQueueItemID: String?
+    var ratingKey: String?
+    var albumRatingKey: String?
+    var artistRatingKey: String?
+    var durationMilliseconds: Int?
+    var title: String
+    var trackArtist: String?
+    var albumArtist: String?
+    var albumName: String
+    var artworkURL: URL?
+    var trackNumber: Int?
+    var discNumber: Int?
+    var streamURL: URL
+
+    init(track: MediaTrack) {
+        id = track.id
+        playQueueItemID = track.playQueueItemID
+        ratingKey = track.ratingKey
+        albumRatingKey = track.albumRatingKey
+        artistRatingKey = track.artistRatingKey
+        durationMilliseconds = track.durationMilliseconds
+        title = track.title
+        trackArtist = track.trackArtist
+        albumArtist = track.albumArtist
+        albumName = track.albumName
+        artworkURL = track.artworkURL
+        trackNumber = track.trackNumber
+        discNumber = track.discNumber
+        streamURL = track.streamURL
+    }
+
+    var mediaTrack: MediaTrack {
+        MediaTrack(
+            id: id,
+            playQueueItemID: playQueueItemID,
+            ratingKey: ratingKey,
+            albumRatingKey: albumRatingKey,
+            artistRatingKey: artistRatingKey,
+            durationMilliseconds: durationMilliseconds,
+            title: title,
+            trackArtist: trackArtist,
+            albumArtist: albumArtist,
+            albumName: albumName,
+            artworkURL: artworkURL,
+            trackNumber: trackNumber,
+            discNumber: discNumber,
+            streamURL: streamURL
+        )
+    }
+}
+
+struct LastPlayQueueSettings: Codable, Equatable {
+    var tracks: [PersistedPlayQueueTrack]
+    var currentTrackID: String?
+    var isShuffleEnabled: Bool
+
+    static let `default` = LastPlayQueueSettings(
+        tracks: [],
+        currentTrackID: nil,
+        isShuffleEnabled: false
+    )
+}
+
 struct AppSettings: Codable, Equatable {
     var display: DisplaySettings
     var server: ServerSettings
@@ -278,6 +343,7 @@ struct AppSettings: Codable, Equatable {
     var mediaSource: ActiveMediaSource
     var navidromeConfig: NavidromeServerConfig
     var localQueue: LocalQueueSettings
+    var lastPlayQueue: LastPlayQueueSettings
 
     private enum CodingKeys: String, CodingKey {
         case display
@@ -286,6 +352,7 @@ struct AppSettings: Codable, Equatable {
         case mediaSource
         case navidromeConfig
         case localQueue
+        case lastPlayQueue
     }
 
     init(display: DisplaySettings, server: ServerSettings, playback: PlaybackSettings) {
@@ -295,6 +362,7 @@ struct AppSettings: Codable, Equatable {
         self.mediaSource = .unspecified
         self.navidromeConfig = .default
         self.localQueue = .default
+        self.lastPlayQueue = .default
     }
 
     init(from decoder: Decoder) throws {
@@ -317,6 +385,7 @@ struct AppSettings: Codable, Equatable {
         self.mediaSource = try container.decodeIfPresent(ActiveMediaSource.self, forKey: .mediaSource) ?? .unspecified
         self.navidromeConfig = try container.decodeIfPresent(NavidromeServerConfig.self, forKey: .navidromeConfig) ?? .default
         self.localQueue = try container.decodeIfPresent(LocalQueueSettings.self, forKey: .localQueue) ?? .default
+        self.lastPlayQueue = try container.decodeIfPresent(LastPlayQueueSettings.self, forKey: .lastPlayQueue) ?? .default
     }
 
     static let `default` = AppSettings(

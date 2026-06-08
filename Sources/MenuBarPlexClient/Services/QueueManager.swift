@@ -16,6 +16,7 @@ final class QueueManager: ObservableObject {
     private var playQueueID: Int?
     private var playQueueVersion: Int?
     private var playQueueTotalCount: Int = 0
+    var queueDidChange: (() -> Void)?
 
     init(context: StoreContext) {
         self.context = context
@@ -57,6 +58,7 @@ final class QueueManager: ObservableObject {
     }
 
     var allTracks: [MediaTrack] { playbackQueue }
+    var currentQueueIsShuffleEnabled: Bool { isShuffleEnabled }
 
     // MARK: - Play
 
@@ -327,6 +329,26 @@ final class QueueManager: ObservableObject {
         replacePlaybackQueue(with: tracks, keepingTrackID: currentTrackID ?? tracks.first?.id)
     }
 
+    func restorePersistedQueue(_ tracks: [MediaTrack], currentTrackID: String?, isShuffleEnabled: Bool) {
+        guard !tracks.isEmpty else { return }
+        playQueueID = nil
+        playQueueVersion = nil
+        playQueueTotalCount = tracks.count
+        self.isShuffleEnabled = isShuffleEnabled
+        orderedPlaybackQueue = tracks
+        playbackQueue = tracks
+        if let currentTrackID,
+           let index = playbackQueue.firstIndex(where: { $0.id == currentTrackID }) {
+            currentQueueIndex = index
+        } else {
+            currentQueueIndex = 0
+        }
+        visiblePlayQueue = playbackQueue
+        context.libraryStore?.refreshQueueStationRecommendations(for: playbackQueue)
+        updatePrebufferedNextTrack()
+        queueDidChange?()
+    }
+
     func insertLocalTracksNext(_ tracks: [MediaTrack]) {
         guard !tracks.isEmpty else { return }
         guard let currentTrack else {
@@ -541,10 +563,6 @@ final class QueueManager: ObservableObject {
         let previousShuffleState = isShuffleEnabled
         let previousOrderedQueue = orderedPlaybackQueue
 
-        isShuffleEnabled = nextShuffleState
-        applyPlaybackOrder(keepingTrackID: trackIDAtToggle)
-        logDebug(isShuffleEnabled ? "Shuffle enabled" : "Shuffle disabled")
-
         if context.mediaService.supportsServerManagedQueue, let playQueueID {
             isShuffleOperationInProgress = true
             isQueueOperationInProgress = true
@@ -556,22 +574,38 @@ final class QueueManager: ObservableObject {
                 }
 
                 do {
-                    let snapshot = try await (nextShuffleState
-                        ? self.context.mediaService.shufflePlayQueue(id: playQueueID)
-                        : self.context.mediaService.unshufflePlayQueue(id: playQueueID))
-                    self.applyServerSnapshot(snapshot, keepingTrackID: self.currentTrack?.id)
-                    self.isShuffleEnabled = snapshot.isShuffled
+                    try await withReversibleTransaction("queue.shuffle") { transaction in
+                        transaction.perform {
+                            self.isShuffleEnabled = nextShuffleState
+                            self.applyPlaybackOrder(keepingTrackID: trackIDAtToggle)
+                            self.logDebug(self.isShuffleEnabled ? "Shuffle enabled" : "Shuffle disabled")
+                        } rollback: {
+                            let currentTrackID = self.currentTrack?.id ?? trackIDAtToggle
+                            self.isShuffleEnabled = previousShuffleState
+                            self.orderedPlaybackQueue = previousOrderedQueue
+                            self.applyPlaybackOrder(keepingTrackID: currentTrackID)
+                        }
+
+                        let snapshot = try await (nextShuffleState
+                            ? self.context.mediaService.shufflePlayQueue(id: playQueueID)
+                            : self.context.mediaService.unshufflePlayQueue(id: playQueueID))
+
+                        transaction.perform {
+                            self.applyServerSnapshot(snapshot, keepingTrackID: self.currentTrack?.id)
+                            self.isShuffleEnabled = snapshot.isShuffled
+                        }
+                    }
                 } catch {
-                    let currentTrackID = self.currentTrack?.id ?? trackIDAtToggle
-                    self.isShuffleEnabled = previousShuffleState
-                    self.orderedPlaybackQueue = previousOrderedQueue
-                    self.applyPlaybackOrder(keepingTrackID: currentTrackID)
                     self.context.libraryStore?.libraryLoadError = LibraryLoadError(error)
                     self.logDebug("Shuffle failed: \(error.localizedDescription)")
                 }
             }
             return
         }
+
+        isShuffleEnabled = nextShuffleState
+        applyPlaybackOrder(keepingTrackID: trackIDAtToggle)
+        logDebug(isShuffleEnabled ? "Shuffle enabled" : "Shuffle disabled")
     }
 
     func handleTrackEnded() {
@@ -586,7 +620,7 @@ final class QueueManager: ObservableObject {
             return
         }
 
-        self.context.playbackEngine?.stopPlayback()
+        self.context.playbackEngine?.pauseAtEndOfQueue()
     }
 
     func advanceToNextTrack() {
@@ -625,6 +659,7 @@ final class QueueManager: ObservableObject {
         playQueueVersion = nil
         playQueueTotalCount = 0
         context.playbackEngine?.prebufferNextTrack(nil)
+        queueDidChange?()
     }
 
     // MARK: - Private
@@ -802,6 +837,7 @@ final class QueueManager: ObservableObject {
         visiblePlayQueue = playbackQueue
         self.context.libraryStore?.refreshQueueStationRecommendations(for: playbackQueue)
         updatePrebufferedNextTrack()
+        queueDidChange?()
     }
 
     private func applyPlaybackOrder(keepingTrackID: String?) {
@@ -812,6 +848,7 @@ final class QueueManager: ObservableObject {
             self.context.libraryStore?.resetQueueStationRecommendations()
             self.context.playbackEngine?.playbackState = .stopped
             self.context.playbackEngine?.prebufferNextTrack(nil)
+            queueDidChange?()
             return
         }
 
@@ -831,6 +868,7 @@ final class QueueManager: ObservableObject {
         visiblePlayQueue = playbackQueue
         self.context.libraryStore?.refreshQueueStationRecommendations(for: playbackQueue)
         updatePrebufferedNextTrack()
+        queueDidChange?()
     }
 
     private func performQueueOperation(_ operation: @escaping () async throws -> Void) async {

@@ -467,6 +467,7 @@ private struct PlaybackSection: View {
             playbackProgress: playbackEngine.playbackProgress,
             playbackPosition: playbackEngine.playbackPosition,
             playbackDuration: playbackEngine.playbackDuration,
+            canSeek: playbackEngine.canSeek,
             isShuffleEnabled: queueManager.isShuffleEnabled,
             canGoToPreviousTrack: queueManager.canGoToPreviousTrack,
             canGoToNextTrack: queueManager.canGoToNextTrack,

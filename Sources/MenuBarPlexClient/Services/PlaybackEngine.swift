@@ -22,6 +22,7 @@ final class PlaybackEngine: ObservableObject {
     @Published var playbackPosition: Double = 0
     @Published var playbackDuration: Double = 0
     @Published var pendingSeekProgress: Double?
+    @Published var canSeek = false
 
     weak var delegate: PlaybackEngineDelegate?
 
@@ -39,12 +40,19 @@ final class PlaybackEngine: ObservableObject {
     private var seekID: Int = 0
     private var bufferingRetryCount = 0
     private var isPlaybackRequested = false
+    private var currentPlaybackToken = UUID()
+    private var resolvedPlaybackDuration: ResolvedPlaybackDuration?
+    private var pendingDeferredSeek: PendingDeferredSeek?
+    private var hasCompletedCurrentTrack = false
+    private var logicalPlaybackAnchor: LogicalPlaybackAnchor?
+    private var currentTransportStartSeconds: Double?
     private var loudnessGainCache: [String: Float] = [:]
     private var missingLoudnessAnalysisTrackIDs = Set<String>()
     private var _currentTrack: MediaTrack?
     private var prebufferedTrackID: String?
     private var prebufferedItem: AVPlayerItem?
     private var prebufferTask: Task<Void, Never>?
+    private var durationResolutionTask: Task<Void, Never>?
     private var remoteCommandTargets: [(command: MPRemoteCommand, target: Any)] = []
     private var nowPlayingArtworkTask: Task<Void, Never>?
     private var nowPlayingArtwork: MPMediaItemArtwork?
@@ -93,22 +101,31 @@ final class PlaybackEngine: ObservableObject {
     }
 
     func seekToProgress(_ progress: Double) {
-        guard let player, playbackDuration > 0 else { return }
-
         let clampedProgress = min(max(progress, 0), 1)
-        let targetTime = CMTime(seconds: playbackDuration * clampedProgress, preferredTimescale: 600)
-        let currentSeekID = nextSeekID()
-        pendingSeekProgress = clampedProgress
-        playbackPosition = min(max(targetTime.seconds, 0), playbackDuration)
 
-        player.seek(to: targetTime, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
-            Task { @MainActor in
-                guard let self, currentSeekID == self.seekID else { return }
-                self.playbackPosition = min(max(targetTime.seconds, 0), self.playbackDuration)
-                self.pendingSeekProgress = nil
-                self.refreshNowPlayingInfo()
-            }
+        guard let player,
+              let currentResolvedDuration = resolvedPlaybackDuration,
+              currentResolvedDuration.seconds > 0 else {
+            logDebug(
+                "Ignored seek for \(nowPlaying.trackName): canSeek=\(canSeek), " +
+                    "duration \(formattedTimestamp(playbackDuration)), " +
+                    "durationSource \(resolvedPlaybackDuration?.source.rawValue ?? "nil")"
+            )
+            return
         }
+
+        guard canSeek else {
+            pendingDeferredSeek = PendingDeferredSeek(
+                progress: clampedProgress,
+                itemID: activeTrackIDForDiagnostics,
+                token: currentPlaybackToken
+            )
+            pendingSeekProgress = clampedProgress
+            logSeekRequest(prefix: "Queued seek", requestedProgress: clampedProgress, duration: currentResolvedDuration)
+            return
+        }
+
+        performSeek(progress: clampedProgress, duration: currentResolvedDuration, player: player)
     }
 
     func setLoudnessLevelingEnabled(_ isEnabled: Bool) {
@@ -167,11 +184,17 @@ final class PlaybackEngine: ObservableObject {
         playbackState = .stopped
         playbackPosition = 0
         playbackDuration = 0
+        resolvedPlaybackDuration = nil
+        pendingDeferredSeek = nil
+        logicalPlaybackAnchor = nil
+        currentTransportStartSeconds = nil
+        canSeek = false
         clearNowPlayingInfo()
     }
 
     func stopPlayback() {
         player?.pause()
+        invalidatePendingSeek()
         removeTimeObserver()
         playerItemEndObserver = nil
         playerItemStatusObserver = nil
@@ -182,6 +205,27 @@ final class PlaybackEngine: ObservableObject {
         bufferingRetryCount = 0
         player = nil
         clearPrebufferedTrack()
+        cancelDurationResolution()
+        resolvedPlaybackDuration = nil
+        pendingDeferredSeek = nil
+        hasCompletedCurrentTrack = false
+        logicalPlaybackAnchor = nil
+        currentTransportStartSeconds = nil
+        canSeek = false
+        refreshNowPlayingInfo()
+    }
+
+    func pauseAtEndOfQueue() {
+        player?.pause()
+        isPlaybackRequested = false
+        cancelDeferredBufferingTransition()
+        cancelBufferingRetry()
+        bufferingRetryCount = 0
+        if playbackDuration > 0 {
+            playbackPosition = playbackDuration
+        }
+        refreshSeekAvailability()
+        transitionPlaybackState(to: .paused)
         refreshNowPlayingInfo()
     }
 
@@ -251,16 +295,30 @@ final class PlaybackEngine: ObservableObject {
     private func preparePlayer(for track: MediaTrack) async {
         let preparationID = nextPlaybackPreparationID()
         _currentTrack = track
+        let nextPlaybackToken = UUID()
 
         let volume = await resolvePlaybackVolume(for: track)
         guard preparationID == playbackPreparationID else { return }
 
+        currentPlaybackToken = nextPlaybackToken
         invalidatePendingSeek()
+        resolvedPlaybackDuration = nil
+        pendingDeferredSeek = nil
+        hasCompletedCurrentTrack = false
+        logicalPlaybackAnchor = nil
+        currentTransportStartSeconds = transportStartSeconds(from: track.streamURL)
+        canSeek = false
         lastPlaybackProgressDate = nil
         bufferingRetryCount = 0
         cancelBufferingRetry()
         context.timelineTracker?.beginTracking(track)
         context.libraryStore?.refreshRelatedAlbums(for: track)
+        if let currentTransportStartSeconds {
+            logDebug(
+                "Detected stream transport start for \(track.title): " +
+                    "\(formattedTimestamp(currentTransportStartSeconds)) from \(transportStartDescription(for: track.streamURL))"
+            )
+        }
         let item = preparedPlayerItem(for: track)
         observePlaybackEnd(for: item)
         observePlayerItemStatus(for: item)
@@ -274,7 +332,13 @@ final class PlaybackEngine: ObservableObject {
         player?.volume = volume
         observePlaybackTime()
         observePlayerTimeControlStatus()
-        updatePlaybackTiming(from: item)
+        updatePlaybackTiming(from: item, track: track, playbackToken: nextPlaybackToken)
+        resolvePlaybackDuration(
+            from: item,
+            preparationID: preparationID,
+            track: track,
+            playbackToken: nextPlaybackToken
+        )
     }
 
     private func applyPlaybackVolume(for track: MediaTrack) async {
@@ -362,7 +426,246 @@ final class PlaybackEngine: ObservableObject {
         String(format: "%.2f", decibels)
     }
 
+    private func formattedTimestamp(_ seconds: Double) -> String {
+        guard seconds.isFinite, seconds >= 0 else { return "unknown" }
+        let totalMilliseconds = Int((seconds * 1_000).rounded())
+        let totalSeconds = totalMilliseconds / 1_000
+        let minutes = totalSeconds / 60
+        let remainingSeconds = totalSeconds % 60
+        let milliseconds = totalMilliseconds % 1_000
+        return String(format: "%d:%02d.%03d (%.3fs)", minutes, remainingSeconds, milliseconds, seconds)
+    }
+
+    private func formattedPercent(_ value: Double) -> String {
+        guard value.isFinite else { return "unknown" }
+        return String(format: "%.2f%%", value * 100)
+    }
+
+    private enum PlaybackDurationSource: String {
+        case plexTrack
+        case trackMetadata
+        case avPlayerItem
+        case avAsset
+        case fallback
+
+        var isMetadata: Bool {
+            switch self {
+            case .plexTrack, .trackMetadata:
+                return true
+            case .avPlayerItem, .avAsset, .fallback:
+                return false
+            }
+        }
+
+        var isPlexSource: Bool {
+            self == .plexTrack
+        }
+    }
+
+    private struct ResolvedPlaybackDuration {
+        let seconds: Double
+        let source: PlaybackDurationSource
+    }
+
+    private struct PendingDeferredSeek {
+        let progress: Double
+        let itemID: String
+        let token: UUID
+    }
+
+    private struct LogicalPlaybackAnchor {
+        let mediaPositionSeconds: Double
+        let playerPositionSeconds: Double
+    }
+
+    private var activeTrackIDForDiagnostics: String {
+        _currentTrack?.ratingKey ?? _currentTrack?.id ?? nowPlaying.trackName
+    }
+
+    private func playbackTokenString(_ token: UUID) -> String {
+        token.uuidString.lowercased()
+    }
+
+    private func describeDuration(_ duration: ResolvedPlaybackDuration?) -> String {
+        guard let duration else { return "nil" }
+        return "\(formattedTimestamp(duration.seconds)) source=\(duration.source.rawValue)"
+    }
+
+    private func setResolvedPlaybackDuration(
+        _ duration: ResolvedPlaybackDuration,
+        itemID: String,
+        playbackToken: UUID
+    ) {
+        guard duration.seconds.isFinite, duration.seconds > 0 else { return }
+        guard playbackToken == currentPlaybackToken, itemID == activeTrackIDForDiagnostics else {
+            logDebug(
+                "Ignored stale duration result for \(itemID): " +
+                    "new=\(formattedTimestamp(duration.seconds)) source=\(duration.source.rawValue), " +
+                    "token=\(playbackTokenString(playbackToken)), currentItem=\(activeTrackIDForDiagnostics), " +
+                    "currentToken=\(playbackTokenString(currentPlaybackToken))"
+            )
+            return
+        }
+
+        if let current = resolvedPlaybackDuration,
+           current.source.isMetadata,
+           !duration.source.isMetadata {
+            let mismatchRatio = abs(duration.seconds - current.seconds) / current.seconds
+            if mismatchRatio > 0.02 {
+                logDebug(
+                    "Ignored AV duration for \(itemID): " +
+                        "new=\(formattedTimestamp(duration.seconds)) source=\(duration.source.rawValue), " +
+                        "existing=\(formattedTimestamp(current.seconds)) source=\(current.source.rawValue), " +
+                        "mismatch=\(formattedPercent(mismatchRatio)), " +
+                        "token=\(playbackTokenString(playbackToken))"
+                )
+            }
+            return
+        }
+
+        let previousDescription = describeDuration(resolvedPlaybackDuration)
+        resolvedPlaybackDuration = duration
+        playbackDuration = max(duration.seconds, playbackPosition)
+        logDebug(
+            "Duration update for \(itemID): " +
+                "new=\(formattedTimestamp(duration.seconds)) source=\(duration.source.rawValue), " +
+                "previous=\(previousDescription), token=\(playbackTokenString(playbackToken))"
+        )
+    }
+
+    private func maybeUpdateDurationFromAVPlayer(
+        _ seconds: Double,
+        source: PlaybackDurationSource,
+        itemID: String,
+        playbackToken: UUID
+    ) {
+        guard seconds.isFinite, seconds > 0 else { return }
+
+        setResolvedPlaybackDuration(
+            ResolvedPlaybackDuration(seconds: seconds, source: source),
+            itemID: itemID,
+            playbackToken: playbackToken
+        )
+    }
+
+    private func resolvedMetadataDuration(for track: MediaTrack) -> ResolvedPlaybackDuration? {
+        guard let durationMilliseconds = track.durationMilliseconds else { return nil }
+        let seconds = Double(durationMilliseconds) / 1_000
+        guard seconds.isFinite, seconds > 0 else { return nil }
+
+        let source: PlaybackDurationSource = context.mediaService is PlexService ? .plexTrack : .trackMetadata
+        return ResolvedPlaybackDuration(seconds: seconds, source: source)
+    }
+
+    private func formattedTimeRanges(_ ranges: [NSValue]?) -> String {
+        guard let ranges, !ranges.isEmpty else { return "[]" }
+        return ranges.map { value in
+            let range = value.timeRangeValue
+            let start = formattedTimestamp(range.start.seconds)
+            let end = formattedTimestamp(CMTimeRangeGetEnd(range).seconds)
+            return "[\(start) -> \(end)]"
+        }.joined(separator: ", ")
+    }
+
+    private func firstTimeRangeStartSeconds(_ ranges: [NSValue]?) -> Double? {
+        guard let start = ranges?.first?.timeRangeValue.start.seconds,
+              start.isFinite,
+              start >= 0 else {
+            return nil
+        }
+        return start
+    }
+
+    private func transportStartSeconds(from url: URL) -> Double? {
+        guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return nil }
+        let queryItems = components.queryItems ?? []
+        for name in ["offset", "start", "startTime", "startTimeOffset", "time"] {
+            guard let value = queryItems.first(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame })?.value,
+                  let seconds = Double(value),
+                  seconds.isFinite,
+                  seconds > 0 else {
+                continue
+            }
+            return name.caseInsensitiveCompare("time") == .orderedSame && seconds > 1_000 ? seconds / 1_000 : seconds
+        }
+        return nil
+    }
+
+    private func transportStartDescription(for url: URL) -> String {
+        guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              let queryItems = components.queryItems else {
+            return "stream URL"
+        }
+
+        for name in ["offset", "start", "startTime", "startTimeOffset", "time"] {
+            if let item = queryItems.first(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame }),
+               let value = item.value {
+                return "query \(item.name)=\(value)"
+            }
+        }
+
+        return "stream URL"
+    }
+
+    private func logSeekRequest(prefix: String, requestedProgress: Double, duration: ResolvedPlaybackDuration) {
+        let itemDuration = player?.currentItem?.duration.seconds ?? -1
+        let playerStatus = player?.currentItem?.status.rawValue ?? -1
+        let currentTime = player?.currentTime().seconds ?? -1
+        let transportStart = currentTransportStartSeconds.map(formattedTimestamp) ?? "none"
+        logDebug(
+            "\(prefix) \(nowPlaying.trackName): " +
+                "itemID=\(activeTrackIDForDiagnostics), token=\(playbackTokenString(currentPlaybackToken)), " +
+                "progress=\(formattedPercent(requestedProgress)), resolvedDuration=\(formattedTimestamp(duration.seconds)), " +
+                "durationSource=\(duration.source.rawValue), playerStatus=\(playerStatus), " +
+                "itemDuration=\(formattedTimestamp(itemDuration)), " +
+                "currentTime=\(formattedTimestamp(currentTime)), " +
+                "transportStart=\(transportStart), " +
+                "loadedTimeRanges=\(formattedTimeRanges(player?.currentItem?.loadedTimeRanges)), " +
+                "seekableTimeRanges=\(formattedTimeRanges(player?.currentItem?.seekableTimeRanges))"
+        )
+    }
+
+    private func performSeek(progress: Double, duration: ResolvedPlaybackDuration, player: AVPlayer) {
+        let rawTarget = duration.seconds * progress
+        let safeTarget = progress >= 0.98 ? min(rawTarget, max(duration.seconds - 2, 0)) : rawTarget
+        let targetSeconds = max(0, min(safeTarget, duration.seconds))
+        let targetTime = CMTime(seconds: targetSeconds, preferredTimescale: 600)
+        let currentSeekID = nextSeekID()
+
+        logSeekRequest(prefix: "Seeking", requestedProgress: progress, duration: duration)
+        pendingDeferredSeek = nil
+        pendingSeekProgress = progress
+        playbackPosition = min(max(targetTime.seconds, 0), playbackDuration)
+
+        player.seek(to: targetTime, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, currentSeekID == self.seekID else { return }
+                let rawPlayerTime = player.currentTime().seconds
+                if rawPlayerTime.isFinite {
+                    self.logicalPlaybackAnchor = LogicalPlaybackAnchor(
+                        mediaPositionSeconds: self.playbackPosition,
+                        playerPositionSeconds: rawPlayerTime
+                    )
+                }
+                self.logDebug(
+                    "Seek completed \(self.nowPlaying.trackName): logical \(self.formattedTimestamp(self.playbackPosition)), " +
+                        "rawPlayer \(self.formattedTimestamp(rawPlayerTime)), " +
+                        "transportStart=\(self.currentTransportStartSeconds.map(self.formattedTimestamp) ?? "none"), " +
+                        "loadedStart=\(self.firstTimeRangeStartSeconds(player.currentItem?.loadedTimeRanges).map(self.formattedTimestamp) ?? "none"), " +
+                        "seekableStart=\(self.firstTimeRangeStartSeconds(player.currentItem?.seekableTimeRanges).map(self.formattedTimestamp) ?? "none"), " +
+                        "duration \(self.formattedTimestamp(self.playbackDuration)), " +
+                        "durationSource \(self.resolvedPlaybackDuration?.source.rawValue ?? "nil")"
+                )
+                self.pendingSeekProgress = nil
+                self.refreshSeekAvailability()
+                self.refreshNowPlayingInfo()
+            }
+        }
+    }
+
     private func handlePlaybackEnded() {
+        guard !hasCompletedCurrentTrack else { return }
+        hasCompletedCurrentTrack = true
         delegate?.playbackEngineDidEndCurrentTrack(self)
     }
 
@@ -396,12 +699,16 @@ final class PlaybackEngine: ObservableObject {
                     guard let self, self.player?.currentItem === item else { return }
                     switch status {
                     case .readyToPlay:
-                        self.updatePlaybackTiming(from: item)
+                        guard let track = self._currentTrack else { return }
+                        self.updatePlaybackTiming(from: item, track: track, playbackToken: self.currentPlaybackToken)
+                        self.refreshSeekAvailability()
+                        self.applyPendingSeekIfNeeded()
                         if self.isPlaybackRequested {
                             self.transitionPlaybackState(to: .playing)
                             self.scheduleBufferingRetryIfNeeded()
                         }
                     case .failed:
+                        self.canSeek = false
                         self.transitionPlaybackState(to: self.isPlaybackRequested ? .buffering : .paused)
                         if self.isPlaybackRequested {
                             self.scheduleBufferingRetryIfNeeded()
@@ -424,7 +731,9 @@ final class PlaybackEngine: ObservableObject {
             Task { @MainActor in
                 let seconds = time.seconds
                 if seconds.isFinite, self.pendingSeekProgress == nil {
-                    if seconds > self.playbackPosition + 0.1 {
+                    let clampedSeconds = self.logicalPlaybackPosition(forRawPlayerSeconds: seconds)
+                    self.logPlaybackOverrunIfNeeded(rawPosition: seconds, logicalPosition: clampedSeconds)
+                    if clampedSeconds > self.playbackPosition + 0.1 {
                         self.lastPlaybackProgressDate = Date()
                         if self.isPlaybackRequested {
                             self.cancelDeferredBufferingTransition()
@@ -433,20 +742,86 @@ final class PlaybackEngine: ObservableObject {
                             self.transitionPlaybackState(to: .playing)
                         }
                     }
-                    self.playbackPosition = max(0, seconds)
+                    self.playbackPosition = clampedSeconds
                 }
 
                 if let duration = player.currentItem?.duration.seconds,
                    duration.isFinite,
-                   duration > 0,
-                   self.playbackDuration != duration {
-                    self.playbackDuration = duration
+                   duration > 0 {
+                    self.maybeUpdateDurationFromAVPlayer(
+                        duration,
+                        source: .avPlayerItem,
+                        itemID: self.activeTrackIDForDiagnostics,
+                        playbackToken: self.currentPlaybackToken
+                    )
+                    self.playbackPosition = self.clampedPlaybackPosition(self.playbackPosition)
                 }
 
+                self.refreshSeekAvailability()
                 self.refreshNowPlayingInfo()
                 self.delegate?.playbackEngine(self, didUpdatePosition: self.playbackPosition, duration: self.playbackDuration)
             }
         }
+    }
+
+    private func clampedPlaybackPosition(_ position: Double) -> Double {
+        guard position.isFinite else { return 0 }
+        let lowerBoundedPosition = max(0, position)
+        guard playbackDuration > 0 else { return lowerBoundedPosition }
+        return min(lowerBoundedPosition, playbackDuration)
+    }
+
+    private func logicalPlaybackPosition(forRawPlayerSeconds rawPlayerSeconds: Double) -> Double {
+        guard let logicalPlaybackAnchor else {
+            if let currentTransportStartSeconds,
+               rawPlayerSeconds < currentTransportStartSeconds - 1 {
+                return clampedPlaybackPosition(currentTransportStartSeconds + max(0, rawPlayerSeconds))
+            }
+            return clampedPlaybackPosition(rawPlayerSeconds)
+        }
+
+        let elapsedSinceAnchor = max(0, rawPlayerSeconds - logicalPlaybackAnchor.playerPositionSeconds)
+        return clampedPlaybackPosition(logicalPlaybackAnchor.mediaPositionSeconds + elapsedSinceAnchor)
+    }
+
+    private func updatePlaybackTimingFromPlayer() {
+        guard let player else { return }
+        let currentTime = player.currentTime().seconds
+        if currentTime.isFinite {
+            playbackPosition = logicalPlaybackPosition(forRawPlayerSeconds: currentTime)
+            logPlaybackOverrunIfNeeded(rawPosition: currentTime, logicalPosition: playbackPosition)
+        }
+    }
+
+    private func refreshSeekAvailability() {
+        canSeek = isCurrentItemSeekable
+    }
+
+    private func logPlaybackOverrunIfNeeded(rawPosition: Double, logicalPosition: Double) {
+        guard rawPosition.isFinite,
+              playbackDuration > 0,
+              rawPosition > playbackDuration + 0.5 else {
+            return
+        }
+
+        logDebug(
+            "Playback exceeded known duration for \(nowPlaying.trackName): " +
+                "rawPlayer \(formattedTimestamp(rawPosition)), logical \(formattedTimestamp(logicalPosition)), " +
+                "known duration \(formattedTimestamp(playbackDuration)), " +
+                "durationSource=\(resolvedPlaybackDuration?.source.rawValue ?? "nil"), " +
+                "itemID=\(activeTrackIDForDiagnostics), token=\(playbackTokenString(currentPlaybackToken))"
+        )
+    }
+
+    private var isCurrentItemSeekable: Bool {
+        guard resolvedPlaybackDuration != nil,
+              playbackDuration > 0,
+              let item = player?.currentItem,
+              item.status == .readyToPlay else {
+            return false
+        }
+
+        return true
     }
 
     private func observePlayerTimeControlStatus() {
@@ -460,18 +835,94 @@ final class PlaybackEngine: ObservableObject {
             }
     }
 
-    private func updatePlaybackTiming(from item: AVPlayerItem) {
+    private func updatePlaybackTiming(from item: AVPlayerItem, track: MediaTrack, playbackToken: UUID) {
         playbackPosition = 0
 
-        let duration = item.duration.seconds
-        if duration.isFinite, duration > 0 {
-            playbackDuration = duration
-        } else if let durationMilliseconds = _currentTrack?.durationMilliseconds {
-            playbackDuration = Double(durationMilliseconds) / 1_000
+        if let metadataDuration = resolvedMetadataDuration(for: track) {
+            setResolvedPlaybackDuration(
+                metadataDuration,
+                itemID: track.ratingKey ?? track.id,
+                playbackToken: playbackToken
+            )
+            logDebug(
+                "Loaded metadata duration for \(nowPlaying.trackName): " +
+                    "\(formattedTimestamp(metadataDuration.seconds)) source=\(metadataDuration.source.rawValue)"
+            )
         } else {
-            playbackDuration = 0
+            let duration = item.duration.seconds
+            if duration.isFinite, duration > 0 {
+                maybeUpdateDurationFromAVPlayer(
+                    duration,
+                    source: .fallback,
+                    itemID: track.ratingKey ?? track.id,
+                    playbackToken: playbackToken
+                )
+                logDebug("Loaded fallback item duration for \(nowPlaying.trackName): \(formattedTimestamp(duration))")
+            } else {
+                playbackDuration = 0
+                resolvedPlaybackDuration = nil
+                logDebug("No duration available yet for \(nowPlaying.trackName)")
+            }
+        }
+
+        let itemDuration = item.duration.seconds
+        if itemDuration.isFinite, itemDuration > 0 {
+            logDebug("Observed player item duration for \(nowPlaying.trackName): \(formattedTimestamp(itemDuration))")
+        } else {
+            logDebug("Player item duration unavailable for \(nowPlaying.trackName)")
         }
         refreshNowPlayingInfo()
+    }
+
+    private func resolvePlaybackDuration(
+        from item: AVPlayerItem,
+        preparationID: Int,
+        track: MediaTrack,
+        playbackToken: UUID
+    ) {
+        durationResolutionTask?.cancel()
+        durationResolutionTask = Task { [weak self] in
+            do {
+                let duration = try await item.asset.load(.duration)
+                guard !Task.isCancelled else { return }
+                let seconds = duration.seconds
+
+                await MainActor.run {
+                    guard let self,
+                          preparationID == self.playbackPreparationID,
+                          self.player?.currentItem === item,
+                          seconds.isFinite,
+                          seconds > 0 else {
+                        return
+                    }
+
+                    self.maybeUpdateDurationFromAVPlayer(
+                        seconds,
+                        source: .avAsset,
+                        itemID: track.ratingKey ?? track.id,
+                        playbackToken: playbackToken
+                    )
+                    self.playbackPosition = self.clampedPlaybackPosition(self.playbackPosition)
+                    self.logDebug(
+                        "Loaded asset duration for \(self.nowPlaying.trackName): " +
+                            "\(self.formattedTimestamp(seconds)) source=\(PlaybackDurationSource.avAsset.rawValue)"
+                    )
+                    self.refreshSeekAvailability()
+                    self.applyPendingSeekIfNeeded()
+                    self.refreshNowPlayingInfo()
+                }
+            } catch {
+                guard !Task.isCancelled else { return }
+                await MainActor.run {
+                    self?.logDebug("Playback duration lookup failed: \(error.localizedDescription)")
+                }
+            }
+        }
+    }
+
+    private func cancelDurationResolution() {
+        durationResolutionTask?.cancel()
+        durationResolutionTask = nil
     }
 
     private func removeTimeObserver() {
@@ -614,11 +1065,35 @@ final class PlaybackEngine: ObservableObject {
             observePlayerTimeControlStatus()
         }
 
-        updatePlaybackTiming(from: item)
+        guard let track = _currentTrack else { return }
+        updatePlaybackTiming(from: item, track: track, playbackToken: currentPlaybackToken)
+        resolvePlaybackDuration(
+            from: item,
+            preparationID: playbackPreparationID,
+            track: track,
+            playbackToken: currentPlaybackToken
+        )
         if resumeTime > 1 {
-            playbackPosition = resumeTime
-            let targetTime = CMTime(seconds: resumeTime, preferredTimescale: 600)
-            player?.seek(to: targetTime, toleranceBefore: .zero, toleranceAfter: .zero)
+            let retryPreparationID = playbackPreparationID
+            let clampedResumeTime = clampedPlaybackPosition(resumeTime)
+            playbackPosition = clampedResumeTime
+            let targetTime = CMTime(seconds: clampedResumeTime, preferredTimescale: 600)
+            player?.seek(to: targetTime, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
+                Task { @MainActor in
+                    guard let self,
+                          self._currentTrack?.id == trackID,
+                          self.playbackPreparationID == retryPreparationID,
+                          let rawPlayerSeconds = self.player?.currentTime().seconds,
+                          rawPlayerSeconds.isFinite else {
+                        return
+                    }
+                    self.logicalPlaybackAnchor = LogicalPlaybackAnchor(
+                        mediaPositionSeconds: clampedResumeTime,
+                        playerPositionSeconds: rawPlayerSeconds
+                    )
+                    self.playbackPosition = clampedResumeTime
+                }
+            }
         }
         player?.play()
         transitionPlaybackState(to: .buffering)
@@ -789,6 +1264,21 @@ final class PlaybackEngine: ObservableObject {
     private func invalidatePendingSeek() {
         seekID += 1
         pendingSeekProgress = nil
+        pendingDeferredSeek = nil
+    }
+
+    private func applyPendingSeekIfNeeded() {
+        guard canSeek,
+              let pendingDeferredSeek,
+              pendingDeferredSeek.itemID == activeTrackIDForDiagnostics,
+              pendingDeferredSeek.token == currentPlaybackToken,
+              let player,
+              let resolvedPlaybackDuration else {
+            return
+        }
+
+        self.pendingDeferredSeek = nil
+        performSeek(progress: pendingDeferredSeek.progress, duration: resolvedPlaybackDuration, player: player)
     }
 
     private func nextPlaybackPreparationID() -> Int {

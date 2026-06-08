@@ -7,6 +7,7 @@ struct NowPlayingCard: View, Equatable {
     let playbackProgress: Double
     let playbackPosition: Double
     let playbackDuration: Double
+    let canSeek: Bool
     let isShuffleEnabled: Bool
     let canGoToPreviousTrack: Bool
     let canGoToNextTrack: Bool
@@ -25,6 +26,7 @@ struct NowPlayingCard: View, Equatable {
             lhs.playbackProgress == rhs.playbackProgress &&
             lhs.playbackPosition == rhs.playbackPosition &&
             lhs.playbackDuration == rhs.playbackDuration &&
+            lhs.canSeek == rhs.canSeek &&
             lhs.isShuffleEnabled == rhs.isShuffleEnabled &&
             lhs.canGoToPreviousTrack == rhs.canGoToPreviousTrack &&
             lhs.canGoToNextTrack == rhs.canGoToNextTrack &&
@@ -90,12 +92,18 @@ struct NowPlayingCard: View, Equatable {
                         value: Binding(
                             get: { isSeeking ? sliderValue : playbackProgress },
                             set: { newValue in
+                                guard canSeek else { return }
                                 isSeeking = true
                                 sliderValue = newValue
                             }
                         ),
                         in: 0 ... 1,
                         onEditingChanged: { editing in
+                            guard canSeek else {
+                                isSeeking = false
+                                sliderValue = playbackProgress
+                                return
+                            }
                             if editing {
                                 sliderValue = playbackProgress
                                 isSeeking = true
@@ -107,6 +115,8 @@ struct NowPlayingCard: View, Equatable {
                         }
                     )
                     .tint(AppTheme.accent)
+                    .disabled(!canSeek)
+                    .opacity(canSeek ? 1 : 0.55)
 
                     HStack {
                         Text(formattedTime(displayedPlaybackPosition))
