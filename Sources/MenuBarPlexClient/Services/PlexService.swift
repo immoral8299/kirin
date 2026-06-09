@@ -384,6 +384,10 @@ final class PlexService: MediaService {
         try await content.fetchArtistStation(server: server, artistRatingKey: artistRatingKey, userToken: userToken)
     }
 
+    func fetchAlbumStation(server: PlexServer, albumRatingKey: String, userToken: String) async throws -> PlexStation? {
+        try await content.fetchAlbumStation(server: server, albumRatingKey: albumRatingKey, userToken: userToken)
+    }
+
     func fetchAlbumRadioTracks(server: PlexServer, albumRatingKey: String, userToken: String) async throws -> [PlexTrack] {
         try await content.fetchAlbumRadioTracks(server: server, albumRatingKey: albumRatingKey, userToken: userToken)
     }

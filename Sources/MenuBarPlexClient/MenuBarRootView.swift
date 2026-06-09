@@ -574,6 +574,7 @@ private struct QueueContent: View {
                     onSelectTrack: appState.selectPlayQueueTrack,
                     onRemoveTrack: appState.removePlayQueueTrack,
                     onMoveTrack: appState.movePlayQueueTrack,
+                    onToggleStationContinuation: appState.toggleStationContinuation,
                     onClearUpcomingTracks: appState.clearUpcomingPlayQueueTracks,
                     isLocalMode: appState.isLocalMode,
                     onImportLocalFiles: chooseLocalFiles

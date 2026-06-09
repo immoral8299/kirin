@@ -62,6 +62,9 @@ final class PlaybackEngine: ObservableObject {
     private let maximumBufferingRetryCount = 3
     private let prebufferRetryDelayNanoseconds: UInt64 = 2_000_000_000
     private let maximumPrebufferRetryCount = 3
+    private let durationResolutionTimeoutNanoseconds: UInt64 = 4_000_000_000
+    private let durationResolutionRetryBaseDelayNanoseconds: UInt64 = 500_000_000
+    private let maximumDurationResolutionTimeoutRetries = 5
 
     init(context: StoreContext) {
         self.context = context
@@ -103,13 +106,37 @@ final class PlaybackEngine: ObservableObject {
     func seekToProgress(_ progress: Double) {
         let clampedProgress = min(max(progress, 0), 1)
 
-        guard let player,
-              let currentResolvedDuration = resolvedPlaybackDuration,
-              currentResolvedDuration.seconds > 0 else {
+        guard let player else {
             logDebug(
                 "Ignored seek for \(nowPlaying.trackName): canSeek=\(canSeek), " +
                     "duration \(formattedTimestamp(playbackDuration)), " +
                     "durationSource \(resolvedPlaybackDuration?.source.rawValue ?? "nil")"
+            )
+            return
+        }
+
+        if shouldRefreshPlaybackDurationOnSeek,
+           let currentTrack,
+           let item = player.currentItem {
+            resolvePlaybackDuration(
+                from: item,
+                preparationID: playbackPreparationID,
+                track: currentTrack,
+                playbackToken: currentPlaybackToken
+            )
+        }
+
+        guard let currentResolvedDuration = resolvedPlaybackDuration,
+              currentResolvedDuration.seconds > 0 else {
+            pendingDeferredSeek = PendingDeferredSeek(
+                progress: clampedProgress,
+                itemID: activeTrackIDForDiagnostics,
+                token: currentPlaybackToken
+            )
+            pendingSeekProgress = clampedProgress
+            logDebug(
+                "Queued seek for \(nowPlaying.trackName) while duration is unresolved: " +
+                    "requestedProgress=\(formattedPercent(clampedProgress))"
             )
             return
         }
@@ -478,6 +505,15 @@ final class PlaybackEngine: ObservableObject {
         let playerPositionSeconds: Double
     }
 
+    private enum PlaybackDurationResolutionError: Error {
+        case timedOut
+    }
+
+    private enum PlaybackDurationResolutionResult {
+        case duration(CMTime)
+        case timedOut
+    }
+
     private var activeTrackIDForDiagnostics: String {
         _currentTrack?.ratingKey ?? _currentTrack?.id ?? nowPlaying.trackName
     }
@@ -555,6 +591,16 @@ final class PlaybackEngine: ObservableObject {
 
         let source: PlaybackDurationSource = context.mediaService is PlexService ? .plexTrack : .trackMetadata
         return ResolvedPlaybackDuration(seconds: seconds, source: source)
+    }
+
+    private var shouldRefreshPlaybackDurationOnSeek: Bool {
+        guard let resolvedPlaybackDuration else { return true }
+        switch resolvedPlaybackDuration.source {
+        case .plexTrack, .trackMetadata, .avAsset:
+            return false
+        case .avPlayerItem, .fallback:
+            return true
+        }
     }
 
     private func formattedTimeRanges(_ ranges: [NSValue]?) -> String {
@@ -745,18 +791,6 @@ final class PlaybackEngine: ObservableObject {
                     self.playbackPosition = clampedSeconds
                 }
 
-                if let duration = player.currentItem?.duration.seconds,
-                   duration.isFinite,
-                   duration > 0 {
-                    self.maybeUpdateDurationFromAVPlayer(
-                        duration,
-                        source: .avPlayerItem,
-                        itemID: self.activeTrackIDForDiagnostics,
-                        playbackToken: self.currentPlaybackToken
-                    )
-                    self.playbackPosition = self.clampedPlaybackPosition(self.playbackPosition)
-                }
-
                 self.refreshSeekAvailability()
                 self.refreshNowPlayingInfo()
                 self.delegate?.playbackEngine(self, didUpdatePosition: self.playbackPosition, duration: self.playbackDuration)
@@ -882,40 +916,118 @@ final class PlaybackEngine: ObservableObject {
     ) {
         durationResolutionTask?.cancel()
         durationResolutionTask = Task { [weak self] in
-            do {
-                let duration = try await item.asset.load(.duration)
-                guard !Task.isCancelled else { return }
-                let seconds = duration.seconds
+            guard let self else { return }
 
-                await MainActor.run {
-                    guard let self,
-                          preparationID == self.playbackPreparationID,
-                          self.player?.currentItem === item,
-                          seconds.isFinite,
-                          seconds > 0 else {
-                        return
+            let itemID = track.ratingKey ?? track.id
+            var timeoutAttempts = 0
+
+            while true {
+                do {
+                    let duration = try await self.loadAssetDurationWithTimeout(for: item)
+                    guard !Task.isCancelled else { return }
+                    let seconds = duration.seconds
+
+                    await MainActor.run {
+                        guard preparationID == self.playbackPreparationID,
+                              self.player?.currentItem === item,
+                              seconds.isFinite,
+                              seconds > 0 else {
+                            return
+                        }
+
+                        self.maybeUpdateDurationFromAVPlayer(
+                            seconds,
+                            source: .avAsset,
+                            itemID: itemID,
+                            playbackToken: playbackToken
+                        )
+                        self.playbackPosition = self.clampedPlaybackPosition(self.playbackPosition)
+                        self.logDebug(
+                            "Loaded asset duration for \(self.nowPlaying.trackName): " +
+                                "\(self.formattedTimestamp(seconds)) source=\(PlaybackDurationSource.avAsset.rawValue)"
+                        )
+                        self.refreshSeekAvailability()
+                        self.applyPendingSeekIfNeeded()
+                        self.refreshNowPlayingInfo()
+                    }
+                    return
+                } catch {
+                    guard !Task.isCancelled else { return }
+
+                    if error is PlaybackDurationResolutionError,
+                       timeoutAttempts < self.maximumDurationResolutionTimeoutRetries {
+                        timeoutAttempts += 1
+                        let retryDelay = self.durationResolutionRetryDelayNanoseconds(for: timeoutAttempts)
+                        await MainActor.run {
+                            self.logDebug(
+                                "Playback duration lookup timed out for \(track.title); retry \(timeoutAttempts)/\(self.maximumDurationResolutionTimeoutRetries) in \(self.formattedDurationResolutionRetryDelay(retryDelay))"
+                            )
+                        }
+                        do {
+                            try await Task.sleep(nanoseconds: retryDelay)
+                        } catch {
+                            return
+                        }
+                        continue
                     }
 
-                    self.maybeUpdateDurationFromAVPlayer(
-                        seconds,
-                        source: .avAsset,
-                        itemID: track.ratingKey ?? track.id,
-                        playbackToken: playbackToken
-                    )
-                    self.playbackPosition = self.clampedPlaybackPosition(self.playbackPosition)
-                    self.logDebug(
-                        "Loaded asset duration for \(self.nowPlaying.trackName): " +
-                            "\(self.formattedTimestamp(seconds)) source=\(PlaybackDurationSource.avAsset.rawValue)"
-                    )
-                    self.refreshSeekAvailability()
-                    self.applyPendingSeekIfNeeded()
-                    self.refreshNowPlayingInfo()
+                    await MainActor.run {
+                        if error is PlaybackDurationResolutionError {
+                            self.logDebug(
+                                "Playback duration lookup timed out for \(track.title); using last known duration \(self.describeDuration(self.resolvedPlaybackDuration))"
+                            )
+                            self.refreshSeekAvailability()
+                            self.applyPendingSeekIfNeeded()
+                            self.refreshNowPlayingInfo()
+                        } else {
+                            self.logDebug("Playback duration lookup failed: \(error.localizedDescription)")
+                        }
+                    }
+                    return
                 }
-            } catch {
-                guard !Task.isCancelled else { return }
-                await MainActor.run {
-                    self?.logDebug("Playback duration lookup failed: \(error.localizedDescription)")
-                }
+            }
+        }
+    }
+
+    private func durationResolutionRetryDelayNanoseconds(for attempt: Int) -> UInt64 {
+        let exponent = max(attempt - 1, 0)
+        return durationResolutionRetryBaseDelayNanoseconds * UInt64(1 << exponent)
+    }
+
+    private func formattedDurationResolutionRetryDelay(_ nanoseconds: UInt64) -> String {
+        String(format: "%.1fs", Double(nanoseconds) / 1_000_000_000)
+    }
+
+    private func loadAssetDurationWithTimeout(for item: AVPlayerItem) async throws -> CMTime {
+        let durationTask = Task { @MainActor in
+            try await item.asset.load(.duration)
+        }
+        let timeoutTask = Task {
+            try await Task.sleep(nanoseconds: self.durationResolutionTimeoutNanoseconds)
+        }
+
+        defer {
+            durationTask.cancel()
+            timeoutTask.cancel()
+        }
+
+        return try await withThrowingTaskGroup(of: PlaybackDurationResolutionResult.self) { group in
+            group.addTask {
+                .duration(try await durationTask.value)
+            }
+            group.addTask {
+                try await timeoutTask.value
+                return .timedOut
+            }
+
+            let result = try await group.next()!
+            group.cancelAll()
+
+            switch result {
+            case .duration(let duration):
+                return duration
+            case .timedOut:
+                throw PlaybackDurationResolutionError.timedOut
             }
         }
     }

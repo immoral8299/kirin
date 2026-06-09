@@ -695,6 +695,11 @@ final class AppState {
         persistCurrentPlayQueue()
     }
 
+    func toggleStationContinuation() {
+        queueManager.toggleStationContinuation()
+        persistCurrentPlayQueue()
+    }
+
 }
 
 // MARK: - PlaybackEngineDelegate

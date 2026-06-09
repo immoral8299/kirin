@@ -192,6 +192,10 @@ struct PlexContentService {
         try await fetchMetadataStation(server: server, ratingKey: artistRatingKey, userToken: userToken)
     }
 
+    func fetchAlbumStation(server: PlexServer, albumRatingKey: String, userToken: String) async throws -> PlexStation? {
+        try await fetchMetadataStation(server: server, ratingKey: albumRatingKey, userToken: userToken)
+    }
+
     func fetchAlbumRadioTracks(server: PlexServer, albumRatingKey: String, userToken: String, similarAlbumLimit: Int = 4) async throws -> [PlexTrack] {
         let seedAlbum = PlexAlbum(id: albumRatingKey, title: "", artist: "", artworkURL: nil)
         let similarAlbums = try await fetchRelatedAlbums(

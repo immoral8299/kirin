@@ -2,16 +2,21 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct PlayQueueView: View {
+    private let queueActivityIndicatorHideDelayNanoseconds: UInt64 = 250_000_000
+
     @ObservedObject var queueManager: QueueManager
     let onSelectTrack: (String) -> Void
     let onRemoveTrack: (String) -> Void
     let onMoveTrack: (String, String?) -> Void
+    let onToggleStationContinuation: () -> Void
     let onClearUpcomingTracks: () -> Void
     var isLocalMode: Bool = false
     var onImportLocalFiles: (() -> Void)?
     @State private var showsPlayedTracks = false
     @State private var draggedTrackID: String?
     @State private var previewTrackIDs: [String] = []
+    @State private var isQueueActivityIndicatorVisible = false
+    @State private var queueActivityIndicatorHideTask: Task<Void, Never>?
 
     var body: some View {
         let currentTrackIndex = currentTrackIndex
@@ -26,11 +31,6 @@ struct PlayQueueView: View {
                     .foregroundStyle(AppTheme.accent)
 
                 Spacer()
-
-                if queueManager.isQueueOperationInProgress {
-                    ProgressView()
-                        .controlSize(.small)
-                }
 
                 if isLocalMode {
                     Button {
@@ -47,19 +47,47 @@ struct PlayQueueView: View {
                     .help("Choose Music")
                 }
 
-                Button {
-                    onClearUpcomingTracks()
-                } label: {
-                    Image(systemName: "trash")
-                        .padding(6)
-                        .contentShape(Rectangle())
+                HStack(spacing: 6) {
+                    if isQueueActivityIndicatorVisible {
+                        ProgressView()
+                            .controlSize(.small)
+                            .tint(AppTheme.accent)
+                            .frame(width: 14, height: 14)
+                    } else {
+                        Color.clear
+                            .frame(width: 14, height: 14)
+                    }
+
+                    if queueManager.isStationContinuationAvailable {
+                        Button {
+                            onToggleStationContinuation()
+                        } label: {
+                            Image(systemName: queueManager.isStationContinuationEnabled ? "infinity.circle.fill" : "infinity.circle")
+                                .padding(6)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(queueManager.isStationContinuationEnabled ? AppTheme.accent : .secondary.opacity(0.74))
+                        .disabled(queueManager.isQueueOperationInProgress)
+                        .interactiveCursor(disabled: queueManager.isQueueOperationInProgress)
+                        .help(queueManager.isStationContinuationEnabled ? "Disable Station Continuation" : "Enable Station Continuation")
+                    }
+
+                    Button {
+                        onClearUpcomingTracks()
+                    } label: {
+                        Image(systemName: "trash")
+                            .padding(6)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.red.opacity(0.9))
+                    .disabled(!hasUpcomingTracks || queueManager.isQueueOperationInProgress)
+                    .interactiveCursor(disabled: !hasUpcomingTracks || queueManager.isQueueOperationInProgress)
+                    .help("Clear Upcoming Tracks")
                 }
-                .buttonStyle(.plain)
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(.red.opacity(0.9))
-                .disabled(!hasUpcomingTracks || queueManager.isQueueOperationInProgress)
-                .interactiveCursor(disabled: !hasUpcomingTracks || queueManager.isQueueOperationInProgress)
-                .help("Clear Upcoming Tracks")
             }
 
             if currentTrackIndex > 0 {
@@ -140,6 +168,12 @@ struct PlayQueueView: View {
             }
         }
         .frame(width: MenuBarLayout.contentWidth, alignment: .leading)
+        .onAppear {
+            syncQueueActivityIndicator(isActive: isQueueActivityInProgress)
+        }
+        .onChange(of: isQueueActivityInProgress) { isActive in
+            syncQueueActivityIndicator(isActive: isActive)
+        }
         .onChange(of: visibleTrackIDs) { newTrackIDs in
             guard !previewTrackIDs.isEmpty,
                   previewTrackIDs.allSatisfy({ newTrackIDs.contains($0) }) else {
@@ -193,11 +227,26 @@ struct PlayQueueView: View {
     }
 
     private func queueRowContent(_ track: MediaTrack, isUpcoming: Bool, isCurrent: Bool) -> some View {
-        HStack(spacing: 8) {
+        let relativeOrder = relativeQueueOrder(for: track)
+        let durationText = formattedDuration(track.durationMilliseconds)
+
+        return HStack(spacing: 8) {
             Image(systemName: isCurrent ? "speaker.wave.2.fill" : "line.3.horizontal")
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(isCurrent ? AppTheme.accent : Color.secondary.opacity(0.55))
-                .frame(width: 16)
+                .frame(width: QueueRowMetrics.leadingIconWidth, alignment: .center)
+
+            Group {
+                if let relativeOrder {
+                    Text("\(relativeOrder)")
+                        .font(.system(size: 10, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.secondary.opacity(0.72))
+                        .monospacedDigit()
+                } else {
+                    Color.clear
+                }
+            }
+            .frame(width: QueueRowMetrics.orderWidth, alignment: .center)
 
             Button {
                 showsPlayedTracks = false
@@ -218,18 +267,29 @@ struct PlayQueueView: View {
             .buttonStyle(.plain)
             .disabled(queueManager.isQueueOperationInProgress)
 
-            if isUpcoming {
-                Button {
-                    onRemoveTrack(track.id)
-                } label: {
-                    Image(systemName: "trash")
-                        .font(.system(size: 11))
+            Text(durationText ?? "")
+                .font(.system(size: 10, weight: .medium, design: .rounded))
+                .foregroundStyle(.secondary.opacity(0.68))
+                .monospacedDigit()
+                .frame(width: QueueRowMetrics.durationWidth, alignment: .trailing)
+
+            Group {
+                if isUpcoming {
+                    Button {
+                        onRemoveTrack(track.id)
+                    } label: {
+                        Image(systemName: "trash")
+                            .font(.system(size: 11))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.red.opacity(0.65))
+                    .disabled(queueManager.isQueueOperationInProgress)
+                    .help("Remove Track from Play Queue")
+                } else {
+                    Color.clear
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(.red.opacity(0.65))
-                .disabled(queueManager.isQueueOperationInProgress)
-                .help("Remove Track from Play Queue")
             }
+            .frame(width: QueueRowMetrics.trailingButtonWidth, alignment: .center)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
@@ -238,6 +298,10 @@ struct PlayQueueView: View {
 
     private var currentTrackIndex: Int {
         queueManager.visiblePlayQueue.firstIndex(where: { $0.id == queueManager.currentPlayQueueTrackID }) ?? -1
+    }
+
+    private var isQueueActivityInProgress: Bool {
+        queueManager.isQueueOperationInProgress || queueManager.isQueueReorderSyncInProgress
     }
 
     private func displayedTracks(currentTrackIndex: Int) -> [MediaTrack] {
@@ -256,6 +320,39 @@ struct PlayQueueView: View {
 
     private func canReorderTrack(_ track: MediaTrack, currentTrackIndex: Int) -> Bool {
         isUpcomingTrack(track, currentTrackIndex: currentTrackIndex)
+    }
+
+    private func relativeQueueOrder(for track: MediaTrack) -> Int? {
+        guard let trackIndex = queueManager.visiblePlayQueue.firstIndex(where: { $0.id == track.id }) else {
+            return nil
+        }
+
+        if currentTrackIndex < 0 {
+            return trackIndex + 1
+        }
+
+        guard trackIndex >= currentTrackIndex else {
+            return nil
+        }
+
+        return trackIndex - currentTrackIndex + 1
+    }
+
+    private func formattedDuration(_ durationMilliseconds: Int?) -> String? {
+        guard let durationMilliseconds, durationMilliseconds > 0 else {
+            return nil
+        }
+
+        let totalSeconds = durationMilliseconds / 1_000
+        let hours = totalSeconds / 3_600
+        let minutes = (totalSeconds % 3_600) / 60
+        let seconds = totalSeconds % 60
+
+        if hours > 0 {
+            return String(format: "%d:%02d:%02d", hours, minutes, seconds)
+        }
+
+        return String(format: "%d:%02d", minutes, seconds)
     }
 
     private func reorderedPreviewTracks(from tracks: [MediaTrack]) -> [MediaTrack] {
@@ -327,10 +424,37 @@ struct PlayQueueView: View {
         draggedTrackID = nil
         previewTrackIDs = []
     }
+
+    private func syncQueueActivityIndicator(isActive: Bool) {
+        queueActivityIndicatorHideTask?.cancel()
+        queueActivityIndicatorHideTask = nil
+
+        if isActive {
+            isQueueActivityIndicatorVisible = true
+            return
+        }
+
+        queueActivityIndicatorHideTask = Task {
+            do {
+                try await Task.sleep(nanoseconds: queueActivityIndicatorHideDelayNanoseconds)
+            } catch {
+                return
+            }
+
+            await MainActor.run {
+                isQueueActivityIndicatorVisible = false
+                queueActivityIndicatorHideTask = nil
+            }
+        }
+    }
 }
 
 private enum QueueRowMetrics {
     static let height: CGFloat = 44
+    static let leadingIconWidth: CGFloat = 16
+    static let orderWidth: CGFloat = 18
+    static let durationWidth: CGFloat = 42
+    static let trailingButtonWidth: CGFloat = 18
 }
 
 private struct QueueDragDropModifier: ViewModifier {

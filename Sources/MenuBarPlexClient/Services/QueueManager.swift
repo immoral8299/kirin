@@ -1,11 +1,31 @@
 import Foundation
 
+private enum QueueContinuationMode {
+    case finite
+    case plexArtistStation
+    case plexAlbumStation
+
+    var isStationBacked: Bool {
+        switch self {
+        case .finite:
+            return false
+        case .plexArtistStation, .plexAlbumStation:
+            return true
+        }
+    }
+}
+
 @MainActor
 final class QueueManager: ObservableObject {
+    private let stationContinuationLookaheadCount = 12
+    private let serverQueueReorderDebounceNanoseconds: UInt64 = 350_000_000
+
     @Published var visiblePlayQueue: [MediaTrack] = []
     @Published var isQueueOperationInProgress = false
     @Published var isShuffleEnabled = false
     @Published private var isShuffleOperationInProgress = false
+    @Published private(set) var isQueueReorderSyncInProgress = false
+    @Published private(set) var isStationContinuationEnabled = false
     @Published private(set) var pendingPlaybackID: String?
     @Published private(set) var pendingPlaybackSource: String?
 
@@ -16,6 +36,13 @@ final class QueueManager: ObservableObject {
     private var playQueueID: Int?
     private var playQueueVersion: Int?
     private var playQueueTotalCount: Int = 0
+    private var continuationMode: QueueContinuationMode = .finite
+    private var stationQueuePrefetchTask: Task<Void, Never>?
+    private var serverQueueReorderTask: Task<Void, Never>?
+    private var queuedQueueOperationTask: Task<Void, Never>?
+    private var queuedServerQueueReorderRevision = 0
+    private var syncedServerQueueReorderRevision = 0
+    private var isFlushingServerQueueReorder = false
     var queueDidChange: (() -> Void)?
 
     init(context: StoreContext) {
@@ -40,7 +67,8 @@ final class QueueManager: ObservableObject {
     }
 
     var canGoToNextTrack: Bool {
-        playbackQueue.indices.contains(currentQueueIndex) && currentQueueIndex < playbackQueue.count - 1
+        guard playbackQueue.indices.contains(currentQueueIndex) else { return false }
+        return currentQueueIndex < playbackQueue.count - 1 || canContinueStationQueueFromTail
     }
 
     var canShuffle: Bool {
@@ -55,6 +83,12 @@ final class QueueManager: ObservableObject {
 
     var currentServerPlayQueueID: Int? {
         context.mediaService.supportsServerManagedQueue ? playQueueID : nil
+    }
+
+    var isStationContinuationAvailable: Bool {
+        continuationMode.isStationBacked &&
+            context.mediaService.supportsServerManagedQueue &&
+            playQueueID != nil
     }
 
     var allTracks: [MediaTrack] { playbackQueue }
@@ -119,7 +153,7 @@ final class QueueManager: ObservableObject {
                             playQueueID: playQueueID,
                             playNext: playNext
                         )
-                        applyServerSnapshot(snapshot, keepingTrackID: currentTrack.id)
+                        applyServerSnapshot(snapshot, keepingTrackID: currentTrack.id, continuationMode: .plexArtistStation)
                         logDebug("Added station recommendation to server play queue \(snapshot.id)")
                     } else {
                         let snapshot = try await context.mediaService.createStationPlayQueue(stationKey: station.key)
@@ -140,24 +174,24 @@ final class QueueManager: ObservableObject {
         case .album:
             Task {
                 do {
-                    let library = context.libraryStore?.selectedPlexLibrary ?? PlexMusicLibrary(id: "", title: "", uuid: nil)
-                    let tracks = try await plexService.fetchAlbumRadioTracks(
+                    guard let station = try await plexService.fetchAlbumStation(
                         server: server, albumRatingKey: recommendation.seedID, userToken: userToken
-                    )
+                    ) else {
+                        return
+                    }
                     if context.mediaService.supportsServerManagedQueue, let playQueueID {
-                        let snapshot = try await plexService.addTracksToPlayQueue(
+                        let snapshot = try await plexService.addStationToPlayQueue(
                             server: server,
-                            library: library,
-                            tracks: tracks,
+                            station: station,
                             playQueueID: playQueueID,
                             playNext: playNext,
                             userToken: userToken
                         )
-                        applyServerSnapshot(snapshot.mediaPlayQueueSnapshot, keepingTrackID: currentTrack.id)
-                        logDebug("Added album radio to server play queue \(snapshot.id)")
+                        applyServerSnapshot(snapshot.mediaPlayQueueSnapshot, keepingTrackID: currentTrack.id, continuationMode: .plexAlbumStation)
+                        logDebug("Added album station to server play queue \(snapshot.id)")
                     } else {
-                        let snapshot = try await plexService.createTrackListPlayQueue(
-                            server: server, library: library, tracks: tracks, userToken: userToken
+                        let snapshot = try await plexService.createStationPlayQueue(
+                            server: server, station: station, userToken: userToken
                         )
                         let mediaTracks = snapshot.tracks.map(\.mediaTrack)
                         if playNext {
@@ -167,10 +201,10 @@ final class QueueManager: ObservableObject {
                             orderedPlaybackQueue.append(contentsOf: mediaTracks)
                         }
                         applyPlaybackOrder(keepingTrackID: currentTrack.id)
-                        logDebug("Enqueued \(mediaTracks.count) track(s) from album radio")
+                        logDebug("Enqueued \(mediaTracks.count) track(s) from album station")
                     }
                 } catch {
-                    logDebug("Enqueue album radio failed: \(error.localizedDescription)")
+                    logDebug("Enqueue album station failed: \(error.localizedDescription)")
                 }
             }
         }
@@ -258,7 +292,7 @@ final class QueueManager: ObservableObject {
                         playQueueID: playQueueID,
                         playNext: playNext
                     )
-                    applyServerSnapshot(snapshot, keepingTrackID: currentTrack.id)
+                    applyServerSnapshot(snapshot, keepingTrackID: currentTrack.id, continuationMode: .plexArtistStation)
                     logDebug("Added station \(station.title) to server play queue \(snapshot.id)")
                     return
                 }
@@ -331,6 +365,9 @@ final class QueueManager: ObservableObject {
 
     func restorePersistedQueue(_ tracks: [MediaTrack], currentTrackID: String?, isShuffleEnabled: Bool) {
         guard !tracks.isEmpty else { return }
+        resetPendingQueueOperationState()
+        continuationMode = .finite
+        isStationContinuationEnabled = false
         playQueueID = nil
         playQueueVersion = nil
         playQueueTotalCount = tracks.count
@@ -394,8 +431,7 @@ final class QueueManager: ObservableObject {
             let pendingID = PendingPlaybackID.recommendation(recommendation.id)
             pendingPlaybackID = pendingID
             Task {
-                let library = PlexMusicLibrary(id: "", title: "", uuid: nil)
-                await playAlbumRadioRecommendation(recommendation, plexService: plexService, server: server, library: library, userToken: userToken)
+                await playAlbumRadioRecommendation(recommendation, plexService: plexService, server: server, userToken: userToken)
                 clearPendingPlayback(ifMatching: pendingID)
             }
         }
@@ -478,40 +514,12 @@ final class QueueManager: ObservableObject {
 
         if context.mediaService.supportsServerManagedQueue,
            let playQueueID {
-            let playQueueItemID = playbackQueue[sourceIndex].playQueueItemID ?? playbackQueue[sourceIndex].id
-            var previewQueue = playbackQueue
-            let track = previewQueue.remove(at: sourceIndex)
-            let adjustedTarget = sourceIndex < targetIndex ? targetIndex - 1 : targetIndex
-            previewQueue.insert(track, at: min(adjustedTarget, previewQueue.count))
-
-            let movedIndex = previewQueue.firstIndex(where: { $0.id == id }) ?? sourceIndex
-            let afterPlayQueueItemID: String?
-            if movedIndex > 0 {
-                afterPlayQueueItemID = previewQueue[movedIndex - 1].playQueueItemID ?? previewQueue[movedIndex - 1].id
-            } else {
-                afterPlayQueueItemID = nil
-            }
-
-            Task {
-                await performQueueOperation {
-                    let snapshot = try await self.context.mediaService.moveQueueItem(
-                        playQueueID: playQueueID,
-                        playQueueItemID: playQueueItemID,
-                        afterPlayQueueItemID: afterPlayQueueItemID,
-                        itemCount: max(self.playQueueTotalCount, self.playbackQueue.count)
-                    )
-                    self.applyServerSnapshot(snapshot, keepingTrackID: self.currentTrack?.id)
-                }
-            }
+            applyOptimisticQueueMove(sourceIndex: sourceIndex, targetIndex: targetIndex)
+            scheduleServerQueueReorderSync(playQueueID: playQueueID)
             return
         }
 
-        let track = playbackQueue[sourceIndex]
-        playbackQueue.remove(at: sourceIndex)
-        let adjustedTarget = sourceIndex < targetIndex ? targetIndex - 1 : targetIndex
-        playbackQueue.insert(track, at: min(adjustedTarget, playbackQueue.count))
-        visiblePlayQueue = playbackQueue
-        updatePrebufferedNextTrack()
+        applyOptimisticQueueMove(sourceIndex: sourceIndex, targetIndex: targetIndex)
     }
 
     func clearUpcomingPlayQueueTracks() {
@@ -523,37 +531,54 @@ final class QueueManager: ObservableObject {
 
         if context.mediaService.supportsServerManagedQueue, let playQueueID {
             let upcomingTracks = Array(playbackQueue.dropFirst(currentIdx + 1))
-            Task {
-                await performQueueOperation {
-                    var latestSnapshot: PlayQueueSnapshot?
-                    for track in upcomingTracks.reversed() {
-                        let playQueueItemID = track.playQueueItemID ?? track.id
-                        latestSnapshot = try await self.context.mediaService.removeQueueItem(
-                            playQueueID: playQueueID,
-                            playQueueItemID: playQueueItemID,
-                            itemCount: max(self.playQueueTotalCount, self.playbackQueue.count)
-                        )
-                    }
+            enqueueQueueOperation {
+                var latestSnapshot: PlayQueueSnapshot?
+                for track in upcomingTracks.reversed() {
+                    let playQueueItemID = track.playQueueItemID ?? track.id
+                    latestSnapshot = try await self.context.mediaService.removeQueueItem(
+                        playQueueID: playQueueID,
+                        playQueueItemID: playQueueItemID,
+                        itemCount: max(self.playQueueTotalCount, self.playbackQueue.count)
+                    )
+                }
 
-                    if let latestSnapshot {
-                        self.applyServerSnapshot(latestSnapshot, keepingTrackID: currentTrack.id)
-                    } else {
-                        self.orderedPlaybackQueue = Array(self.orderedPlaybackQueue.prefix(currentIdx + 1))
-                        self.playbackQueue = Array(self.playbackQueue.prefix(currentIdx + 1))
-                        self.visiblePlayQueue = self.playbackQueue
-                        self.playQueueTotalCount = self.playbackQueue.count
-                    }
+                if let latestSnapshot {
+                    self.applyServerSnapshot(latestSnapshot, keepingTrackID: currentTrack.id)
+                } else {
+                    self.orderedPlaybackQueue = Array(self.orderedPlaybackQueue.prefix(currentIdx + 1))
+                    self.playbackQueue = Array(self.playbackQueue.prefix(currentIdx + 1))
+                    self.visiblePlayQueue = self.playbackQueue
+                    self.playQueueTotalCount = self.playbackQueue.count
                 }
             }
             return
         }
 
-        orderedPlaybackQueue = Array(orderedPlaybackQueue.prefix(currentIdx + 1))
-        playbackQueue = Array(playbackQueue.prefix(currentIdx + 1))
-        visiblePlayQueue = playbackQueue
-        isShuffleEnabled = false
-        updatePrebufferedNextTrack()
-        logDebug("Cleared upcoming tracks")
+        enqueueQueueOperation {
+            self.orderedPlaybackQueue = Array(self.orderedPlaybackQueue.prefix(currentIdx + 1))
+            self.playbackQueue = Array(self.playbackQueue.prefix(currentIdx + 1))
+            self.visiblePlayQueue = self.playbackQueue
+            self.isShuffleEnabled = false
+            self.context.libraryStore?.refreshQueueStationRecommendations(for: self.playbackQueue)
+            self.updatePrebufferedNextTrack()
+            self.queueDidChange?()
+            self.logDebug("Cleared upcoming tracks")
+        }
+    }
+
+    func toggleStationContinuation() {
+        guard isStationContinuationAvailable else { return }
+        enqueueQueueOperation {
+            let previousValue = self.isStationContinuationEnabled
+            try await withReversibleTransaction("queue.stationContinuation") { transaction in
+                transaction.perform {
+                    self.setStationContinuationEnabled(!previousValue)
+                    self.logDebug(self.isStationContinuationEnabled ? "Station continuation enabled" : "Station continuation disabled")
+                } rollback: {
+                    self.setStationContinuationEnabled(previousValue)
+                }
+            }
+        }
     }
 
     func toggleShuffle() {
@@ -574,6 +599,7 @@ final class QueueManager: ObservableObject {
                 }
 
                 do {
+                    await self.flushPendingServerQueueReorderIfNeeded(playQueueID: playQueueID)
                     try await withReversibleTransaction("queue.shuffle") { transaction in
                         transaction.perform {
                             self.isShuffleEnabled = nextShuffleState
@@ -620,17 +646,40 @@ final class QueueManager: ObservableObject {
             return
         }
 
-        self.context.playbackEngine?.pauseAtEndOfQueue()
+        guard canContinueStationQueueFromTail else {
+            self.context.playbackEngine?.pauseAtEndOfQueue()
+            return
+        }
+
+        let exhaustedTrackID = currentTrack?.id
+        Task {
+            let didAdvance = await continueStationQueueFromTail(after: exhaustedTrackID)
+            if didAdvance {
+                self.queueDidChange?()
+                logDebug("Auto-advanced to \(self.context.playbackEngine?.nowPlaying.trackName ?? "")")
+            } else {
+                self.context.playbackEngine?.pauseAtEndOfQueue()
+            }
+        }
     }
 
     func advanceToNextTrack() {
-        guard canGoToNextTrack else { return }
-        let nextIndex = min(currentQueueIndex + 1, playbackQueue.count - 1)
-        guard nextIndex != currentQueueIndex else { return }
+        guard playbackQueue.indices.contains(currentQueueIndex) else { return }
 
-        currentQueueIndex = nextIndex
+        if currentQueueIndex < playbackQueue.count - 1 {
+            currentQueueIndex += 1
+            Task {
+                await playCurrentTrack()
+            }
+            return
+        }
+
+        guard canContinueStationQueueFromTail else { return }
+        let currentTrackID = currentTrack?.id
         Task {
-            await playCurrentTrack()
+            if await continueStationQueueFromTail(after: currentTrackID) {
+                self.queueDidChange?()
+            }
         }
     }
 
@@ -658,6 +707,12 @@ final class QueueManager: ObservableObject {
         playQueueID = nil
         playQueueVersion = nil
         playQueueTotalCount = 0
+        continuationMode = .finite
+        isStationContinuationEnabled = false
+        resetPendingQueueOperationState()
+        resetPendingServerQueueReorderState()
+        stationQueuePrefetchTask?.cancel()
+        stationQueuePrefetchTask = nil
         context.playbackEngine?.prebufferNextTrack(nil)
         queueDidChange?()
     }
@@ -739,7 +794,10 @@ final class QueueManager: ObservableObject {
 
         do {
             let snapshot = try await context.mediaService.createStationPlayQueue(stationKey: station.key)
-            replacePlaybackQueue(with: snapshot)
+            let continuationMode: QueueContinuationMode = context.mediaService.supportsServerManagedQueue
+                ? .plexArtistStation
+                : .finite
+            replacePlaybackQueue(with: snapshot, continuationMode: continuationMode)
             logDebug("Loaded \(snapshot.tracks.count) track(s) from station")
             await playCurrentTrack()
             logDebug("Now playing \(self.context.playbackEngine?.nowPlaying.trackName ?? "")")
@@ -777,31 +835,39 @@ final class QueueManager: ObservableObject {
         self.context.libraryStore?.isLoadingLibrary = false
     }
 
-    private func playAlbumRadioRecommendation(_ recommendation: MediaStationRecommendation, plexService: PlexService, server: PlexServer, library: PlexMusicLibrary, userToken: String) async {
+    private func playAlbumRadioRecommendation(_ recommendation: MediaStationRecommendation, plexService: PlexService, server: PlexServer, userToken: String) async {
         self.context.libraryStore?.isLoadingLibrary = true
         self.context.libraryStore?.libraryLoadError = nil
-        logDebug("Starting album radio for \(recommendation.title)")
+        logDebug("Starting album station for \(recommendation.title)")
 
         do {
-            let tracks = try await plexService.fetchAlbumRadioTracks(
+            guard let station = try await plexService.fetchAlbumStation(
                 server: server, albumRatingKey: recommendation.seedID, userToken: userToken
+            ) else {
+                throw PlexAPIError.invalidResponse
+            }
+            let snapshot = try await plexService.createStationPlayQueue(
+                server: server, station: station, userToken: userToken
             )
-            let snapshot = try await plexService.createTrackListPlayQueue(
-                server: server, library: library, tracks: tracks, userToken: userToken
-            )
-            replacePlaybackQueue(with: snapshot.mediaPlayQueueSnapshot)
-            logDebug("Loaded \(snapshot.tracks.count) track(s) from album radio")
+            replacePlaybackQueue(with: snapshot.mediaPlayQueueSnapshot, continuationMode: .plexAlbumStation)
+            logDebug("Loaded \(snapshot.tracks.count) track(s) from album station")
             await playCurrentTrack()
             logDebug("Now playing \(self.context.playbackEngine?.nowPlaying.trackName ?? "")")
         } catch {
             self.context.libraryStore?.libraryLoadError = LibraryLoadError(error)
-            logDebug("Album radio failed: \(error.localizedDescription)")
+            logDebug("Album station failed: \(error.localizedDescription)")
         }
 
         self.context.libraryStore?.isLoadingLibrary = false
     }
 
     private func replacePlaybackQueue(with tracks: [MediaTrack], keepingTrackID: String?) {
+        stationQueuePrefetchTask?.cancel()
+        stationQueuePrefetchTask = nil
+        resetPendingQueueOperationState()
+        resetPendingServerQueueReorderState()
+        continuationMode = .finite
+        isStationContinuationEnabled = false
         playQueueID = nil
         playQueueVersion = nil
         playQueueTotalCount = tracks.count
@@ -809,20 +875,36 @@ final class QueueManager: ObservableObject {
         applyPlaybackOrder(keepingTrackID: keepingTrackID)
     }
 
-    private func replacePlaybackQueue(with snapshot: PlayQueueSnapshot) {
-        applyServerSnapshot(snapshot, keepingTrackID: snapshot.selectedTrackID ?? snapshot.tracks.first?.id)
+    private func replacePlaybackQueue(with snapshot: PlayQueueSnapshot, continuationMode: QueueContinuationMode = .finite) {
+        stationQueuePrefetchTask?.cancel()
+        stationQueuePrefetchTask = nil
+        resetPendingQueueOperationState()
+        resetPendingServerQueueReorderState()
+        applyServerSnapshot(snapshot, keepingTrackID: snapshot.selectedTrackID ?? snapshot.tracks.first?.id, continuationMode: continuationMode)
     }
 
-    private func applyServerSnapshot(_ snapshot: PlayQueueSnapshot, keepingTrackID: String?) {
+    private func applyServerSnapshot(_ snapshot: PlayQueueSnapshot, keepingTrackID: String?, continuationMode: QueueContinuationMode? = nil) {
         playQueueID = snapshot.id
         playQueueVersion = snapshot.version
         playQueueTotalCount = snapshot.totalCount
         isShuffleEnabled = snapshot.isShuffled
+        if let continuationMode {
+            self.continuationMode = continuationMode
+            isStationContinuationEnabled = continuationMode.isStationBacked
+        } else if !self.continuationMode.isStationBacked {
+            isStationContinuationEnabled = false
+        }
         orderedPlaybackQueue = snapshot.tracks
         applyPlaybackOrder(keepingTrackID: keepingTrackID)
     }
 
     private func applyLocalQueueEdit(_ tracks: [MediaTrack], keepingTrackID: String?) {
+        stationQueuePrefetchTask?.cancel()
+        stationQueuePrefetchTask = nil
+        resetPendingQueueOperationState()
+        resetPendingServerQueueReorderState()
+        continuationMode = .finite
+        isStationContinuationEnabled = false
         playQueueID = nil
         playQueueVersion = nil
         playQueueTotalCount = tracks.count
@@ -842,6 +924,8 @@ final class QueueManager: ObservableObject {
 
     private func applyPlaybackOrder(keepingTrackID: String?) {
         guard !orderedPlaybackQueue.isEmpty else {
+            continuationMode = .finite
+            isStationContinuationEnabled = false
             playbackQueue = []
             visiblePlayQueue = []
             currentQueueIndex = 0
@@ -871,8 +955,64 @@ final class QueueManager: ObservableObject {
         queueDidChange?()
     }
 
+    private var canContinueStationQueueFromTail: Bool {
+        isStationContinuationAvailable &&
+            isStationContinuationEnabled &&
+            playbackQueue.indices.contains(currentQueueIndex) &&
+            currentQueueIndex == playbackQueue.count - 1
+    }
+
+    private func enqueueQueueOperation(_ operation: @escaping @MainActor () async throws -> Void) {
+        let previousTask = queuedQueueOperationTask
+        queuedQueueOperationTask = Task { @MainActor [weak self] in
+            _ = await previousTask?.result
+            guard let self else { return }
+            await self.performQueueOperation(operation)
+        }
+    }
+
+    private func continueStationQueueFromTail(after currentTrackID: String?) async -> Bool {
+        guard canContinueStationQueueFromTail,
+              let playQueueID,
+              let currentTrackID else {
+            return false
+        }
+
+        let centeredOnItemID = currentTrack?.playQueueItemID ?? currentTrack?.id
+
+        do {
+            let snapshot = try await context.mediaService.refreshPlayQueue(
+                id: playQueueID,
+                itemCount: max(playQueueTotalCount, playbackQueue.count) + stationContinuationLookaheadCount,
+                centeredOn: centeredOnItemID
+            )
+            guard currentTrack?.id == currentTrackID else {
+                return false
+            }
+            guard snapshot.tracks.contains(where: { $0.id == currentTrackID }) else {
+                logDebug("Station queue refresh did not include current track \(currentTrackID)")
+                return false
+            }
+
+            applyServerSnapshot(snapshot, keepingTrackID: currentTrackID)
+            guard playbackQueue.indices.contains(currentQueueIndex),
+                  playbackQueue[currentQueueIndex].id == currentTrackID,
+                  currentQueueIndex < playbackQueue.count - 1 else {
+                return false
+            }
+
+            currentQueueIndex += 1
+            await playCurrentTrack()
+            return true
+        } catch {
+            context.libraryStore?.libraryLoadError = LibraryLoadError(error)
+            logDebug("Station queue refresh failed: \(error.localizedDescription)")
+            return false
+        }
+    }
+
     private func performQueueOperation(_ operation: @escaping () async throws -> Void) async {
-        guard !isQueueOperationInProgress else { return }
+        await flushPendingServerQueueReorderIfNeeded()
         isQueueOperationInProgress = true
         defer { isQueueOperationInProgress = false }
 
@@ -881,6 +1021,16 @@ final class QueueManager: ObservableObject {
         } catch {
             self.context.libraryStore?.libraryLoadError = LibraryLoadError(error)
             logDebug("Play queue operation failed: \(error.localizedDescription)")
+        }
+    }
+
+    private func setStationContinuationEnabled(_ isEnabled: Bool) {
+        isStationContinuationEnabled = isEnabled && continuationMode.isStationBacked
+        if isStationContinuationEnabled, let currentTrack {
+            prefetchStationQueueLookaheadIfNeeded(for: currentTrack)
+        } else {
+            stationQueuePrefetchTask?.cancel()
+            stationQueuePrefetchTask = nil
         }
     }
 
@@ -898,10 +1048,195 @@ final class QueueManager: ObservableObject {
         guard let track = self.currentTrack else { return }
         await self.context.playbackEngine?.play(track: track)
         updatePrebufferedNextTrack()
+        prefetchStationQueueLookaheadIfNeeded(for: track)
     }
 
     private func updatePrebufferedNextTrack() {
         context.playbackEngine?.prebufferNextTrack(nextTrack)
+    }
+
+    private func applyOptimisticQueueMove(sourceIndex: Int, targetIndex: Int) {
+        let currentTrackID = currentTrack?.id
+        let adjustedTarget = sourceIndex < targetIndex ? targetIndex - 1 : targetIndex
+        let track = playbackQueue.remove(at: sourceIndex)
+        playbackQueue.insert(track, at: min(adjustedTarget, playbackQueue.count))
+        orderedPlaybackQueue = playbackQueue
+        if let currentTrackID,
+           let currentIndex = playbackQueue.firstIndex(where: { $0.id == currentTrackID }) {
+            currentQueueIndex = currentIndex
+        }
+        visiblePlayQueue = playbackQueue
+        self.context.libraryStore?.refreshQueueStationRecommendations(for: playbackQueue)
+        updatePrebufferedNextTrack()
+        queueDidChange?()
+    }
+
+    private func scheduleServerQueueReorderSync(playQueueID: Int) {
+        queuedServerQueueReorderRevision += 1
+        isQueueReorderSyncInProgress = true
+        serverQueueReorderTask?.cancel()
+        serverQueueReorderTask = Task {
+            do {
+                try await Task.sleep(nanoseconds: self.serverQueueReorderDebounceNanoseconds)
+            } catch {
+                return
+            }
+
+            await self.flushPendingServerQueueReorderIfNeeded(playQueueID: playQueueID, cancelScheduledTask: false)
+        }
+    }
+
+    private func flushPendingServerQueueReorderIfNeeded(
+        playQueueID: Int? = nil,
+        cancelScheduledTask: Bool = true
+    ) async {
+        if cancelScheduledTask {
+            serverQueueReorderTask?.cancel()
+            serverQueueReorderTask = nil
+        }
+
+        guard queuedServerQueueReorderRevision > syncedServerQueueReorderRevision,
+              !isFlushingServerQueueReorder,
+              let resolvedPlayQueueID = playQueueID ?? self.playQueueID else {
+            isQueueReorderSyncInProgress = queuedServerQueueReorderRevision > syncedServerQueueReorderRevision
+            return
+        }
+
+        isFlushingServerQueueReorder = true
+        isQueueReorderSyncInProgress = true
+        defer {
+            isFlushingServerQueueReorder = false
+            isQueueReorderSyncInProgress = queuedServerQueueReorderRevision > syncedServerQueueReorderRevision
+        }
+
+        while queuedServerQueueReorderRevision > syncedServerQueueReorderRevision {
+            let targetRevision = queuedServerQueueReorderRevision
+            let currentTrackID = currentTrack?.id
+            let desiredQueue = playbackQueue
+
+            do {
+                let snapshot = try await reconcileServerQueueOrder(
+                    playQueueID: resolvedPlayQueueID,
+                    desiredQueue: desiredQueue
+                )
+                syncedServerQueueReorderRevision = targetRevision
+
+                guard currentTrack?.id == currentTrackID,
+                      queuedServerQueueReorderRevision == targetRevision else {
+                    continue
+                }
+
+                applyServerSnapshot(snapshot, keepingTrackID: currentTrackID)
+            } catch {
+                guard !(error is CancellationError) else {
+                    return
+                }
+                context.libraryStore?.libraryLoadError = LibraryLoadError(error)
+                logDebug("Play queue reorder sync failed: \(error.localizedDescription)")
+
+                do {
+                    let snapshot = try await context.mediaService.refreshPlayQueue(
+                        id: resolvedPlayQueueID,
+                        itemCount: max(playQueueTotalCount, playbackQueue.count),
+                        centeredOn: currentTrack?.playQueueItemID ?? currentTrack?.id
+                    )
+                    syncedServerQueueReorderRevision = queuedServerQueueReorderRevision
+                    applyServerSnapshot(snapshot, keepingTrackID: currentTrack?.id)
+                } catch {
+                    guard !(error is CancellationError) else {
+                        return
+                    }
+                    context.libraryStore?.libraryLoadError = LibraryLoadError(error)
+                    logDebug("Play queue reorder recovery failed: \(error.localizedDescription)")
+                }
+                return
+            }
+        }
+    }
+
+    private func reconcileServerQueueOrder(
+        playQueueID: Int,
+        desiredQueue: [MediaTrack]
+    ) async throws -> PlayQueueSnapshot {
+        var latestSnapshot = PlayQueueSnapshot(
+            id: playQueueID,
+            totalCount: max(playQueueTotalCount, desiredQueue.count),
+            selectedTrackID: currentTrack?.id,
+            version: playQueueVersion,
+            isShuffled: isShuffleEnabled,
+            tracks: desiredQueue
+        )
+
+        guard let currentTrackID = currentTrack?.id,
+              let currentIndex = desiredQueue.firstIndex(where: { $0.id == currentTrackID }),
+              currentIndex < desiredQueue.count - 1 else {
+            return latestSnapshot
+        }
+
+        for index in (currentIndex + 1)..<desiredQueue.count {
+            let track = desiredQueue[index]
+            let previousTrack = desiredQueue[index - 1]
+            latestSnapshot = try await context.mediaService.moveQueueItem(
+                playQueueID: playQueueID,
+                playQueueItemID: track.playQueueItemID ?? track.id,
+                afterPlayQueueItemID: previousTrack.playQueueItemID ?? previousTrack.id,
+                itemCount: max(playQueueTotalCount, desiredQueue.count)
+            )
+        }
+
+        return latestSnapshot
+    }
+
+    private func resetPendingServerQueueReorderState() {
+        serverQueueReorderTask?.cancel()
+        serverQueueReorderTask = nil
+        queuedServerQueueReorderRevision = 0
+        syncedServerQueueReorderRevision = 0
+        isFlushingServerQueueReorder = false
+        isQueueReorderSyncInProgress = false
+    }
+
+    private func resetPendingQueueOperationState() {
+        queuedQueueOperationTask?.cancel()
+        queuedQueueOperationTask = nil
+    }
+
+    private func prefetchStationQueueLookaheadIfNeeded(for track: MediaTrack) {
+        guard canContinueStationQueueFromTail,
+              let playQueueID else {
+            stationQueuePrefetchTask?.cancel()
+            stationQueuePrefetchTask = nil
+            return
+        }
+
+        let currentTrackID = track.id
+        let centeredOnItemID = track.playQueueItemID ?? track.id
+        stationQueuePrefetchTask?.cancel()
+        stationQueuePrefetchTask = Task {
+            do {
+                let snapshot = try await self.context.mediaService.refreshPlayQueue(
+                    id: playQueueID,
+                    itemCount: max(self.playQueueTotalCount, self.playbackQueue.count) + self.stationContinuationLookaheadCount,
+                    centeredOn: centeredOnItemID
+                )
+                guard !Task.isCancelled,
+                      self.currentTrack?.id == currentTrackID,
+                      self.playbackQueue.indices.contains(self.currentQueueIndex),
+                      self.currentQueueIndex == self.playbackQueue.count - 1,
+                      snapshot.tracks.contains(where: { $0.id == currentTrackID }) else {
+                    return
+                }
+
+                self.applyServerSnapshot(snapshot, keepingTrackID: currentTrackID)
+            } catch {
+                guard !Task.isCancelled else { return }
+                self.logDebug("Station queue prefetch failed: \(error.localizedDescription)")
+            }
+
+            if !Task.isCancelled {
+                self.stationQueuePrefetchTask = nil
+            }
+        }
     }
 
     private func logDebug(_ message: String) {
