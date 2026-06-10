@@ -7,6 +7,7 @@ final class AppState {
     let settingsStore = SettingsStore()
     let updateChecker = UpdateChecker()
     let authService: PlexAuthService
+    let audioOutputManager: AudioOutputManager
 
     let libraryStore: LibraryStore
     let playbackEngine: PlaybackEngine
@@ -47,6 +48,7 @@ final class AppState {
 
     init() {
         authService = PlexAuthService()
+        audioOutputManager = AudioOutputManager(settingsStore: settingsStore)
 
         let keychain = KeychainStore()
 
@@ -117,6 +119,7 @@ final class AppState {
             self?.persistCurrentPlayQueue()
         }
         bindAuthProfileUpdates()
+        bindAudioOutputSelection()
 
         switch settingsStore.settings.mediaSource {
         case .plex where authService.authToken != nil:
@@ -556,6 +559,16 @@ final class AppState {
             .store(in: &cancellables)
     }
 
+    private func bindAudioOutputSelection() {
+        settingsStore.$settings
+            .map(\.selectedAudioOutputDeviceUID)
+            .removeDuplicates()
+            .sink { [weak self] uid in
+                self?.playbackEngine.setAudioOutputDevice(uniqueID: uid)
+            }
+            .store(in: &cancellables)
+    }
+
     // MARK: - Server & Library
 
     func selectServer(id: String) {
@@ -619,6 +632,15 @@ final class AppState {
 
     func setFallbackLoudnessGainDecibels(_ decibels: Int) {
         playbackEngine.setFallbackLoudnessGainDecibels(decibels)
+    }
+
+    func setPlaybackVolume(_ volume: Double) {
+        playbackEngine.setPlaybackVolume(volume)
+    }
+
+    func selectAudioOutputDevice(uid: String?) {
+        audioOutputManager.selectAudioOutputDevice(uid: uid)
+        playbackEngine.setAudioOutputDevice(uniqueID: audioOutputManager.selectedAudioOutputDeviceUID)
     }
 
     func setListenedThresholdPercentage(_ percentage: Int) {

@@ -453,11 +453,13 @@ private struct PlaybackSection: View {
     let appState: AppState
     @ObservedObject private var playbackEngine: PlaybackEngine
     @ObservedObject private var queueManager: QueueManager
+    @ObservedObject private var audioOutputManager: AudioOutputManager
 
     init(appState: AppState) {
         self.appState = appState
         _playbackEngine = ObservedObject(wrappedValue: appState.playbackEngine)
         _queueManager = ObservedObject(wrappedValue: appState.queueManager)
+        _audioOutputManager = ObservedObject(wrappedValue: appState.audioOutputManager)
     }
 
     var body: some View {
@@ -472,11 +474,17 @@ private struct PlaybackSection: View {
             canGoToPreviousTrack: queueManager.canGoToPreviousTrack,
             canGoToNextTrack: queueManager.canGoToNextTrack,
             canShuffle: queueManager.canShuffle,
+            playbackVolume: playbackEngine.playbackVolume,
+            audioOutputDevices: audioOutputManager.availableOutputDevices,
+            selectedAudioOutputDeviceUID: audioOutputManager.selectedAudioOutputDeviceUID,
             onPlayPause: appState.togglePlayback,
             onNext: appState.nextTrack,
             onPrevious: appState.previousTrack,
             onSeek: appState.seekToProgress,
-            onToggleShuffle: appState.toggleShuffle
+            onToggleShuffle: appState.toggleShuffle,
+            onSetPlaybackVolume: appState.setPlaybackVolume,
+            onSelectAudioOutputDevice: appState.selectAudioOutputDevice,
+            onShowAudioControls: audioOutputManager.refreshAvailableOutputDevices
         )
         .equatable()
     }

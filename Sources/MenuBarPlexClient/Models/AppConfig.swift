@@ -225,27 +225,32 @@ struct PlaybackSettings: Codable, Equatable {
     var loudnessLevelingEnabled: Bool
     var fallbackLoudnessGainDecibels: Int
     var listenedThresholdPercentage: Int
+    var selectedAudioOutputDeviceUID: String?
 
     private enum CodingKeys: String, CodingKey {
         case loudnessLevelingEnabled
         case fallbackLoudnessGainDecibels
         case listenedThresholdPercentage
+        case selectedAudioOutputDeviceUID
     }
 
     static let `default` = PlaybackSettings(
         loudnessLevelingEnabled: false,
         fallbackLoudnessGainDecibels: -6,
-        listenedThresholdPercentage: 90
+        listenedThresholdPercentage: 90,
+        selectedAudioOutputDeviceUID: nil
     )
 
     init(
         loudnessLevelingEnabled: Bool,
         fallbackLoudnessGainDecibels: Int,
-        listenedThresholdPercentage: Int
+        listenedThresholdPercentage: Int,
+        selectedAudioOutputDeviceUID: String?
     ) {
         self.loudnessLevelingEnabled = loudnessLevelingEnabled
         self.fallbackLoudnessGainDecibels = Self.clampedFallbackLoudnessGain(fallbackLoudnessGainDecibels)
         self.listenedThresholdPercentage = listenedThresholdPercentage
+        self.selectedAudioOutputDeviceUID = selectedAudioOutputDeviceUID
     }
 
     init(from decoder: Decoder) throws {
@@ -254,6 +259,7 @@ struct PlaybackSettings: Codable, Equatable {
         let fallbackGain = try container.decodeIfPresent(Int.self, forKey: .fallbackLoudnessGainDecibels) ?? -6
         fallbackLoudnessGainDecibels = Self.clampedFallbackLoudnessGain(fallbackGain)
         listenedThresholdPercentage = try container.decodeIfPresent(Int.self, forKey: .listenedThresholdPercentage) ?? 90
+        selectedAudioOutputDeviceUID = try container.decodeIfPresent(String.self, forKey: .selectedAudioOutputDeviceUID)
     }
 
     static func clampedFallbackLoudnessGain(_ value: Int) -> Int {
@@ -432,5 +438,9 @@ extension AppSettings {
     var fallbackLoudnessGainDecibels: Int {
         get { playback.fallbackLoudnessGainDecibels }
         set { playback.fallbackLoudnessGainDecibels = PlaybackSettings.clampedFallbackLoudnessGain(newValue) }
+    }
+    var selectedAudioOutputDeviceUID: String? {
+        get { playback.selectedAudioOutputDeviceUID }
+        set { playback.selectedAudioOutputDeviceUID = newValue }
     }
 }

@@ -23,6 +23,7 @@ final class PlaybackEngine: ObservableObject {
     @Published var playbackDuration: Double = 0
     @Published var pendingSeekProgress: Double?
     @Published var canSeek = false
+    @Published private(set) var playbackVolume: Double = 1.0
 
     weak var delegate: PlaybackEngineDelegate?
 
@@ -176,6 +177,21 @@ final class PlaybackEngine: ObservableObject {
         Task {
             await applyPlaybackVolume(for: currentTrack)
         }
+    }
+
+    func setPlaybackVolume(_ volume: Double) {
+        let clampedVolume = min(max(volume, 0), 1)
+        guard playbackVolume != clampedVolume else { return }
+        playbackVolume = clampedVolume
+
+        guard let currentTrack = _currentTrack else { return }
+        Task {
+            await applyPlaybackVolume(for: currentTrack)
+        }
+    }
+
+    func setAudioOutputDevice(uniqueID: String?) {
+        player?.audioOutputDeviceUniqueID = uniqueID
     }
 
     func playCurrentTrack() async {
@@ -356,6 +372,7 @@ final class PlaybackEngine: ObservableObject {
             player = AVPlayer(playerItem: item)
         }
 
+        applyAudioOutputDevice(to: player)
         player?.volume = volume
         observePlaybackTime()
         observePlayerTimeControlStatus()
@@ -375,6 +392,11 @@ final class PlaybackEngine: ObservableObject {
     }
 
     private func resolvePlaybackVolume(for track: MediaTrack) async -> Float {
+        let loudnessAdjustedVolume = await resolveLoudnessAdjustedVolume(for: track)
+        return max(0, min(1, Float(playbackVolume) * loudnessAdjustedVolume))
+    }
+
+    private func resolveLoudnessAdjustedVolume(for track: MediaTrack) async -> Float {
         guard context.settingsStore.settings.loudnessLevelingEnabled else {
             logDebug("Loudness leveling disabled for \(track.title)")
             return 1.0
@@ -419,6 +441,10 @@ final class PlaybackEngine: ObservableObject {
             missingLoudnessAnalysisTrackIDs.insert(cacheKey)
             return fallbackPlaybackVolume(for: track, reason: "Skipped loudness lookup: \(error.localizedDescription)")
         }
+    }
+
+    private func applyAudioOutputDevice(to player: AVPlayer?) {
+        player?.audioOutputDeviceUniqueID = context.settingsStore.settings.selectedAudioOutputDeviceUID
     }
 
     private func canResolveLoudnessGain(for track: MediaTrack) -> Bool {
@@ -1175,6 +1201,13 @@ final class PlaybackEngine: ObservableObject {
             player = AVPlayer(playerItem: item)
             observePlaybackTime()
             observePlayerTimeControlStatus()
+        }
+
+        applyAudioOutputDevice(to: player)
+        if let track = _currentTrack {
+            Task {
+                await applyPlaybackVolume(for: track)
+            }
         }
 
         guard let track = _currentTrack else { return }

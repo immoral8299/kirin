@@ -12,13 +12,20 @@ struct NowPlayingCard: View, Equatable {
     let canGoToPreviousTrack: Bool
     let canGoToNextTrack: Bool
     let canShuffle: Bool
+    let playbackVolume: Double
+    let audioOutputDevices: [AudioOutputDevice]
+    let selectedAudioOutputDeviceUID: String?
     let onPlayPause: () -> Void
     let onNext: () -> Void
     let onPrevious: () -> Void
     let onSeek: (Double) -> Void
     let onToggleShuffle: () -> Void
+    let onSetPlaybackVolume: (Double) -> Void
+    let onSelectAudioOutputDevice: (String?) -> Void
+    let onShowAudioControls: () -> Void
     @State private var sliderValue: Double = 0
     @State private var isSeeking = false
+    @State private var isAudioPanelExpanded = false
 
     nonisolated static func == (lhs: NowPlayingCard, rhs: NowPlayingCard) -> Bool {
         lhs.metadata == rhs.metadata &&
@@ -30,7 +37,10 @@ struct NowPlayingCard: View, Equatable {
             lhs.isShuffleEnabled == rhs.isShuffleEnabled &&
             lhs.canGoToPreviousTrack == rhs.canGoToPreviousTrack &&
             lhs.canGoToNextTrack == rhs.canGoToNextTrack &&
-            lhs.canShuffle == rhs.canShuffle
+            lhs.canShuffle == rhs.canShuffle &&
+            lhs.playbackVolume == rhs.playbackVolume &&
+            lhs.audioOutputDevices == rhs.audioOutputDevices &&
+            lhs.selectedAudioOutputDeviceUID == rhs.selectedAudioOutputDeviceUID
     }
 
     var body: some View {
@@ -72,6 +82,14 @@ struct NowPlayingCard: View, Equatable {
                         Spacer(minLength: 0)
 
                         HStack(spacing: 16) {
+                            transportButton(
+                                icon: "shuffle",
+                                isActive: isShuffleEnabled,
+                                isEnabled: canShuffle,
+                                circleSize: 34,
+                                iconSize: 11,
+                                action: onToggleShuffle
+                            )
                             transportButton(icon: "backward.fill", isEnabled: canGoToPreviousTrack, action: onPrevious)
                             transportButton(
                                 icon: PlaybackStateIcon.actionSystemImageName(for: playbackState),
@@ -79,7 +97,16 @@ struct NowPlayingCard: View, Equatable {
                                 action: onPlayPause
                             )
                             transportButton(icon: "forward.fill", isEnabled: canGoToNextTrack, action: onNext)
-                            transportButton(icon: "shuffle", isActive: isShuffleEnabled, isEnabled: canShuffle, action: onToggleShuffle)
+                            transportButton(
+                                icon: speakerIconName,
+                                isActive: isAudioPanelExpanded,
+                                circleSize: 34,
+                                iconSize: 11,
+                                action: { isAudioPanelExpanded.toggle() }
+                            )
+                            .popover(isPresented: $isAudioPanelExpanded, arrowEdge: .top) {
+                                audioControlsPanel
+                            }
                         }
                         .frame(maxWidth: .infinity, alignment: .center)
                     }
@@ -137,6 +164,11 @@ struct NowPlayingCard: View, Equatable {
                 sliderValue = newValue
             }
         }
+        .onChange(of: isAudioPanelExpanded) { isExpanded in
+            if isExpanded {
+                onShowAudioControls()
+            }
+        }
     }
 
     private var focusTrap: some View {
@@ -145,11 +177,64 @@ struct NowPlayingCard: View, Equatable {
             .accessibilityHidden(true)
     }
 
+    private var audioControlsPanel: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: speakerIconName)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.secondary)
+
+                Slider(
+                    value: Binding(
+                        get: { playbackVolume },
+                        set: { onSetPlaybackVolume($0) }
+                    ),
+                    in: 0 ... 1
+                )
+                .tint(AppTheme.accent)
+
+                Text(volumeLabel)
+                    .font(.system(size: 10, weight: .medium, design: .rounded))
+                    .foregroundStyle(.secondary.opacity(0.78))
+                    .frame(width: 34, alignment: .trailing)
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Output")
+                    .font(.system(size: 10, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.secondary.opacity(0.72))
+
+                HStack(spacing: 8) {
+                    Picker(
+                        "Audio Output",
+                        selection: Binding(
+                            get: { selectedAudioOutputDeviceUID },
+                            set: { onSelectAudioOutputDevice($0) }
+                        )
+                    ) {
+                        Text("System Default").tag(String?.none)
+                        ForEach(audioOutputDevices) { device in
+                            Text(device.name).tag(Optional(device.uid))
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .labelsHidden()
+                    .frame(maxWidth: .infinity, alignment: .center)
+                }
+            }
+        }
+        .padding(10)
+        .frame(width: 220)
+        .background(AppTheme.panelFillSoft, in: RoundedRectangle(cornerRadius: AppCornerRadius.medium, style: .continuous))
+    }
+
     private func transportButton(
         icon: String,
         isActive: Bool = false,
         isEnabled: Bool = true,
         showsProgress: Bool = false,
+        circleSize: CGFloat = 44,
+        iconSize: CGFloat = 13,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
@@ -159,11 +244,11 @@ struct NowPlayingCard: View, Equatable {
                         .controlSize(.small)
                 } else {
                     Image(systemName: icon)
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(.system(size: iconSize, weight: .semibold))
                         .offset(y: -1)
                 }
             }
-            .frame(minWidth: 44, minHeight: 44)
+            .frame(width: circleSize, height: circleSize)
             .background((isActive ? AppTheme.accentActiveBackground : AppTheme.transportFill), in: Circle())
             .opacity(isEnabled ? 1 : 0.42)
         }
@@ -171,6 +256,23 @@ struct NowPlayingCard: View, Equatable {
         .disabled(!isEnabled)
         .interactiveCursor(disabled: !isEnabled)
         .foregroundStyle(isEnabled ? (isActive ? AppTheme.accent : Color.primary) : Color.secondary.opacity(0.72))
+    }
+
+    private var speakerIconName: String {
+        switch playbackVolume {
+        case ...0.001:
+            return "speaker.slash.fill"
+        case ..<0.34:
+            return "speaker.wave.1.fill"
+        case ..<0.67:
+            return "speaker.wave.2.fill"
+        default:
+            return "speaker.wave.3.fill"
+        }
+    }
+
+    private var volumeLabel: String {
+        "\(Int((playbackVolume * 100).rounded()))%"
     }
 
     private var trackNumberLabel: String? {
